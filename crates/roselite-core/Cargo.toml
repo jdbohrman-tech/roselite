@@ -1,0 +1,47 @@
+[package]
+name = "roselite-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core library for Roselite - Veilid app store"
+
+[dependencies]
+# Veilid
+veilid-core.workspace = true
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling  
+thiserror = "1.0"
+
+# Cryptography
+sha2.workspace = true
+hex = "0.4"
+base64 = "0.22"
+blake3 = "1.5"
+ed25519-dalek = "2.0"
+x25519-dalek = "2.0"
+rand = "0.8"
+
+# Utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Archive handling
+tar = "0.4"
+flate2 = "1.0"
+
+# Logging
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3.0" 
