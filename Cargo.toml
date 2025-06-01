@@ -1,8 +1,7 @@
 [workspace]
 members = [
-    "crates/roselite-core",
-    "crates/roselite-cli",
-    "crates/roselite-store",
+    "roselite-core",
+    "roselite-cli",
 ]
 resolver = "2"
 

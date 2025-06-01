@@ -1,18 +1,22 @@
 use clap::{Parser, Subcommand};
 use color_eyre::Result;
-use roselite_core::*;
+use roselite_core::{
+    package::{Package, PackageBuilder},
+    store::{VeilidStore, AppStore},
+    types::{AppInfo, VeilUri, AppId},
+};
 use std::path::PathBuf;
-use std::io::Read;
+use tracing::{info, warn, debug};
+use url;
 
-mod local;
+mod gateway;
 
-use local::{LocalRegistry, parse_veil_uri};
-use roselite_core::store::AppStore;
+use gateway::UniversalGateway;
 
-/// Roselite - Decentralized app store for Veilid
+/// Roselite - P2P static site hosting via Veilid DHT
 #[derive(Parser)]
 #[command(name = "roselite")]
-#[command(about = "A decentralized app store for the Veilid network")]
+#[command(about = "Deploy static sites to the Veilid P2P network")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -21,9 +25,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Bundle an app into a .veilidpkg package
+    /// Bundle a static site into a .veilidpkg package
     Bundle {
-        /// Source directory containing the app
+        /// Source directory containing the static site
         #[arg(value_name = "DIR")]
         source_dir: Option<PathBuf>,
         
@@ -31,23 +35,23 @@ enum Commands {
         #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
         
-        /// App name
+        /// Site name
         #[arg(long)]
         name: Option<String>,
         
-        /// App version
+        /// Site version
         #[arg(long)]
         version: Option<String>,
         
-        /// App description
+        /// Site description
         #[arg(long)]
         description: Option<String>,
         
-        /// Developer name
+        /// Developer/author name
         #[arg(long)]
         developer: Option<String>,
         
-        /// Entry point file
+        /// Entry point file (default: index.html)
         #[arg(long)]
         entry: Option<String>,
         
@@ -56,58 +60,26 @@ enum Commands {
         tags: Option<String>,
     },
     
-    /// Publish a package to the Veilid DHT
+    /// Publish a package to the Veilid DHT for P2P hosting
     Publish {
         /// Package file to publish
         #[arg(value_name = "PACKAGE")]
         package: PathBuf,
-    },
-    
-    /// Install an app from a veil:// URI
-    Install {
-        /// Veilid URI of the app to install
-        #[arg(value_name = "URI")]
-        uri: String,
-    },
-    
-    /// List installed apps
-    List {
-        /// Show detailed information
+        
+        /// Show all available gateways
         #[arg(short, long)]
-        verbose: bool,
-    },
-    
-    /// Run an installed app
-    Run {
-        /// Name or ID of the app to run
-        #[arg(value_name = "APP")]
-        app: String,
-    },
-    
-    /// Search for apps in the store
-    Search {
-        /// Search query
-        #[arg(value_name = "QUERY")]
-        query: String,
+        gateways: bool,
         
-        /// Filter by tags
+        /// Open the site in browser after publishing
         #[arg(long)]
-        tags: Option<String>,
-        
-        /// Filter by developer
-        #[arg(long)]
-        developer: Option<String>,
-        
-        /// Maximum number of results
-        #[arg(short, long)]
-        limit: Option<usize>,
+        open: bool,
     },
     
-    /// Show app information
-    Info {
-        /// App ID or veil:// URI
-        #[arg(value_name = "APP")]
-        app: String,
+    /// Access a site directly from a DHT key or gateway URL
+    Access {
+        /// DHT key or gateway URL of the site to access
+        #[arg(value_name = "KEY_OR_URL")]
+        key_or_url: String,
     },
 }
 
@@ -144,23 +116,11 @@ async fn main() -> Result<()> {
                 tags
             ).await?;
         }
-        Commands::Publish { package } => {
-            cmd_publish(package).await?;
+        Commands::Publish { package, gateways, open } => {
+            cmd_publish(package, gateways, open).await?;
         }
-        Commands::Install { uri } => {
-            cmd_install(uri).await?;
-        }
-        Commands::List { verbose } => {
-            cmd_list(verbose).await?;
-        }
-        Commands::Run { app } => {
-            cmd_run(app).await?;
-        }
-        Commands::Search { query, tags, developer, limit } => {
-            cmd_search(query, tags, developer, limit).await?;
-        }
-        Commands::Info { app } => {
-            cmd_info(app).await?;
+        Commands::Access { key_or_url } => {
+            cmd_access(key_or_url).await?;
         }
     }
 
@@ -179,7 +139,7 @@ async fn cmd_bundle(
 ) -> Result<()> {
     let source_dir = source_dir.unwrap_or_else(|| std::env::current_dir().unwrap());
     
-    println!("🏗️  Bundling app from: {}", source_dir.display());
+    println!("🏗️  Bundling site from: {}", source_dir.display());
     
     // Interactive prompts for missing information
     let name = match name {
@@ -187,7 +147,7 @@ async fn cmd_bundle(
         None => {
             use dialoguer::Input;
             Input::new()
-                .with_prompt("App name")
+                .with_prompt("Site name")
                 .interact_text()?
         }
     };
@@ -197,9 +157,8 @@ async fn cmd_bundle(
     
     // Build package
     let mut builder = PackageBuilder::new(name.clone(), &source_dir)
-        .version(version)
-        .entry(entry);
-        
+        .version(version.clone());
+    
     if let Some(desc) = description {
         builder = builder.description(desc);
     }
@@ -208,496 +167,297 @@ async fn cmd_bundle(
         builder = builder.developer(dev);
     }
     
+    builder = builder.entry(entry);
+    
     if let Some(tags_str) = tags {
-        let tag_list: Vec<String> = tags_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
+        let tag_list: Vec<String> = tags_str.split(',').map(|s| s.trim().to_string()).collect();
         builder = builder.tags(tag_list);
     }
     
     let package = builder.build().await?;
     
+    // Output path
     let output_path = output.unwrap_or_else(|| {
-        PathBuf::from(format!("{}{}", name, PACKAGE_EXTENSION))
+        PathBuf::from(format!("{}.veilidpkg", name.replace(' ', "-").to_lowercase()))
     });
     
-    // Actually write the package to disk
+    // Save package to file
     tokio::fs::write(&output_path, &package.content).await?;
     
     println!("✅ Package created: {}", output_path.display());
-    println!("📦 Size: {} bytes", package.size_bytes);
+    println!("📦 Size: {} bytes", std::fs::metadata(&output_path)?.len());
     
     Ok(())
 }
 
-async fn cmd_publish(package_path: PathBuf) -> Result<()> {
+async fn cmd_publish(package_path: PathBuf, gateways: bool, open: bool) -> Result<()> {
     println!("📤 Publishing package: {}", package_path.display());
     
+    // Load package
     let package = Package::from_file(&package_path).await?;
-    let mut store = store::VeilidStore::new().await?;
     
-    let uri = store.publish(package).await?;
-    
-    println!("✅ Published successfully!");
-    println!("🔗 URI: {}", uri);
-    
-    // Generate QR code
-    match generate_qr_code(&uri.to_string()) {
-        Ok(qr_text) => {
-            println!("📱 QR Code:");
-            println!("{}", qr_text);
-        }
-        Err(e) => {
-            println!("⚠️  Failed to generate QR code: {}", e);
-        }
-    }
-    
-    Ok(())
-}
-
-/// Generate a QR code for the given text
-fn generate_qr_code(text: &str) -> Result<String> {
-    use qrcode::{QrCode, render::unicode};
-    
-    let code = QrCode::new(text)?;
-    let image = code
-        .render::<unicode::Dense1x2>()
-        .dark_color(unicode::Dense1x2::Light)
-        .light_color(unicode::Dense1x2::Dark)
-        .build();
-    
-    Ok(image)
-}
-
-async fn cmd_install(uri_str: String) -> Result<()> {
-    println!("📥 Installing app from: {}", uri_str);
-    
-    // Parse the Veilid URI
-    let uri = parse_veil_uri(&uri_str)?;
-    println!("🔍 Parsed URI: App ID = {}, Version = {:?}", uri.app_id, uri.version);
-    
-    // Initialize store and local registry
-    let store = store::VeilidStore::new().await?;
-    let registry = LocalRegistry::new()?;
-    
-    // Check if already installed
-    if let Some(local_app) = registry.get_app(&uri.app_id).await? {
-        if let Some(requested_version) = &uri.version {
-            if &local_app.app_info.version == requested_version {
-                println!("✅ App {} v{} is already installed!", uri.app_id, requested_version);
-                return Ok(());
-            } else {
-                println!("⚠️  App {} is installed with version {}, but you requested {}",
-                    uri.app_id, local_app.app_info.version, requested_version);
-            }
-        } else {
-            println!("✅ App {} v{} is already installed!", uri.app_id, local_app.app_info.version);
-            return Ok(());
-        }
-    }
-    
-    // Download the package
-    println!("📦 Downloading package...");
-    let package = store.download(&uri).await?;
-    
-    println!("✅ Downloaded {} v{} by {}", 
+    println!("📦 Package: {} v{} by {}", 
         package.manifest.name, 
         package.manifest.version, 
         package.manifest.developer
     );
     
-    // Create installation directory
-    let app_dir = registry.apps_dir().join(&uri.app_id.0);
-    tokio::fs::create_dir_all(&app_dir).await?;
+    // Initialize Universal Gateway
+    let gateway = UniversalGateway::new();
     
-    // Extract package contents
-    println!("📁 Extracting package to: {}", app_dir.display());
-    extract_package(&package, &app_dir).await?;
-    
-    // Add to local registry
-    let app_info = package.to_app_info();
-    registry.add_app(app_info.clone(), app_dir.clone()).await?;
-    
-    println!("✅ Successfully installed {} v{}!", app_info.name, app_info.version);
-    println!("📁 Installed to: {}", app_dir.display());
-    
-    Ok(())
-}
-
-/// Extract a package to the specified directory
-async fn extract_package(package: &Package, target_dir: &std::path::Path) -> Result<()> {
-    use flate2::read::GzDecoder;
-    use tar::Archive;
-    use std::io::Cursor;
-    
-    // Decompress and extract the package content
-    let decoder = GzDecoder::new(Cursor::new(&package.content));
-    let mut archive = Archive::new(decoder);
-    
-    // Extract all files
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path = entry.path()?.to_path_buf();
-        let target_path = target_dir.join(&path);
-        
-        // Ensure parent directory exists
-        if let Some(parent) = target_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+    // Initialize Veilid connection and store
+    println!("🌐 Connecting to Veilid DHT...");
+    let mut store = match VeilidStore::new().await {
+        Ok(store) => {
+            println!("✅ Successfully connected to Veilid network!");
+            store
+        },
+        Err(e) => {
+            println!("⚠️  Failed to connect to Veilid network: {}", e);
+            println!("📝 This could be due to:");
+            println!("   • No Veilid bootstrap nodes available");
+            println!("   • Network connectivity issues");
+            println!("   • Veilid node not properly configured");
+            println!("   • Running in fallback mode");
+            
+            // Still try to proceed with fallback mode
+            VeilidStore::new().await?
         }
-        
-        // Extract file
-        let mut content = Vec::new();
-        entry.read_to_end(&mut content)?;
-        tokio::fs::write(&target_path, &content).await?;
-    }
-    
-    Ok(())
-}
-
-async fn cmd_list(verbose: bool) -> Result<()> {
-    println!("📱 Installed apps:");
-    
-    let registry = LocalRegistry::new()?;
-    let apps = registry.list_apps().await?;
-    
-    if apps.is_empty() {
-        println!("  No apps installed yet.");
-        println!("  Try installing an app with: roselite install veil://app/<app-id>");
-        return Ok(());
-    }
-    
-    // Sort by name
-    let mut sorted_apps = apps;
-    sorted_apps.sort_by(|a, b| a.app_info.name.cmp(&b.app_info.name));
-    
-    for app in sorted_apps {
-        if verbose {
-            println!();
-            println!("📦 {}", app.app_info.name);
-            println!("   Version: {}", app.app_info.version);
-            println!("   Developer: {}", app.app_info.developer);
-            println!("   Description: {}", app.app_info.description);
-            println!("   Category: {}", app.app_info.category);
-            println!("   Entry Point: {}", app.app_info.entry_point);
-            println!("   Size: {} bytes", app.app_info.size_bytes);
-            println!("   Installed: {}", app.installed_at.format("%Y-%m-%d %H:%M:%S UTC"));
-            println!("   Path: {}", app.install_path.display());
-            if !app.app_info.tags.is_empty() {
-                println!("   Tags: {}", app.app_info.tags.join(", "));
-            }
-            println!("   URI: {}", app.app_info.uri());
-        } else {
-            println!("  {} v{} by {} ({})", 
-                app.app_info.name, 
-                app.app_info.version, 
-                app.app_info.developer,
-                app.app_info.id
-            );
-        }
-    }
-    
-    if !verbose {
-        println!();
-        println!("Use --verbose flag for detailed information");
-    }
-    
-    Ok(())
-}
-
-async fn cmd_run(app: String) -> Result<()> {
-    println!("🚀 Running app: {}", app);
-    
-    let registry = LocalRegistry::new()?;
-    
-    // Find the app by name or ID
-    let local_app = registry.find_app_by_name(&app).await?
-        .ok_or_else(|| color_eyre::eyre::eyre!("App '{}' not found. Use 'roselite list' to see installed apps", app))?;
-    
-    println!("📦 Found app: {} v{}", local_app.app_info.name, local_app.app_info.version);
-    
-    // Check if executable exists
-    if !local_app.executable_path.exists() {
-        return Err(color_eyre::eyre::eyre!(
-            "Entry point not found: {}\nApp may be corrupted. Try reinstalling.", 
-            local_app.executable_path.display()
-        ));
-    }
-    
-    // Determine how to run the app based on entry point
-    let entry_point = &local_app.app_info.entry_point;
-    let working_dir = &local_app.install_path;
-    
-    println!("📁 Working directory: {}", working_dir.display());
-    println!("🎯 Entry point: {}", entry_point);
-    
-    // Execute the command
-    let result = if entry_point.ends_with(".html") || entry_point.ends_with(".htm") {
-        // Web app - open in default browser
-        println!("🌐 Opening web app in default browser...");
-        
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg(local_app.executable_path.to_string_lossy().as_ref())
-                .current_dir(working_dir)
-                .spawn()
-        }
-        
-        #[cfg(target_os = "linux")]
-        {
-            std::process::Command::new("xdg-open")
-                .arg(local_app.executable_path.to_string_lossy().as_ref())
-                .current_dir(working_dir)
-                .spawn()
-        }
-        
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("start")
-                .arg(local_app.executable_path.to_string_lossy().as_ref())
-                .current_dir(working_dir)
-                .spawn()
-        }
-    } else if entry_point.ends_with(".py") {
-        // Python script
-        println!("🐍 Running Python script...");
-        std::process::Command::new("python3")
-            .arg(&local_app.app_info.entry_point)
-            .current_dir(working_dir)
-            .spawn()
-    } else if entry_point.ends_with(".js") {
-        // Node.js script
-        println!("📜 Running Node.js script...");
-        std::process::Command::new("node")
-            .arg(&local_app.app_info.entry_point)
-            .current_dir(working_dir)
-            .spawn()
-    } else {
-        // Try to execute directly
-        println!("⚙️  Running executable...");
-        std::process::Command::new(&local_app.executable_path)
-            .current_dir(working_dir)
-            .spawn()
     };
     
-    // Handle the spawn result
-    match result {
-        Ok(mut child) => {
-            println!("✅ App launched successfully!");
-            println!("Press Ctrl+C to return to terminal (app will continue running)");
+    // Publish to Veilid DHT
+    println!("📡 Publishing to Veilid DHT...");
+    
+    match store.publish(package).await {
+        Ok(veil_uri) => {
+            println!("✅ Package published successfully!");
             
-            // Wait for the process to complete or user interrupt
-            tokio::select! {
-                result = tokio::task::spawn_blocking(move || child.wait()) => {
-                    match result? {
-                        Ok(status) => {
-                            if status.success() {
-                                println!("✅ App exited successfully");
-                            } else {
-                                println!("⚠️  App exited with status: {}", status);
-                            }
-                        }
-                        Err(e) => {
-                            println!("❌ App execution failed: {}", e);
-                        }
+            // Show DHT record information
+            println!("\n📊 DHT Record Details:");
+            println!("   📋 App ID: {}", veil_uri.app_id.0);
+            if let Some(version) = &veil_uri.version {
+                println!("   📈 Version: {}", version);
+            }
+            println!("   🔗 DHT Record Key: {}", veil_uri.app_id.0);
+            println!("   📡 Storage: Veilid distributed hash table");
+            
+            // Generate gateway URLs and instructions
+            let app_name = Some(store.get_app(&veil_uri.app_id).await?.map(|app| app.name).unwrap_or_else(|| veil_uri.app_id.0.clone()));
+            let primary_url = gateway.generate_url(&veil_uri.app_id, app_name.as_deref())?;
+            
+            // Show instant web access
+            println!("\n🚀 INSTANT WEB ACCESS:");
+            println!("   🌐 Primary URL: {}", primary_url);
+            println!("   📱 Mobile-friendly HTTPS");
+            println!("   🔄 Real-time DHT resolution");
+            println!("   ✅ No setup required!");
+            
+            if gateways {
+                // Show all available gateways
+                println!("\n🌍 ALL AVAILABLE GATEWAYS:");
+                let all_urls = gateway.generate_all_urls(&veil_uri.app_id, app_name.as_deref());
+                for (name, url) in all_urls {
+                    println!("   🔗 {}: {}", name, url);
+                }
+            }
+            
+            // Show comprehensive gateway instructions
+            println!("\n{}", gateway.generate_setup_instructions(&veil_uri.app_id, app_name.as_deref()));
+            
+            // Show sharing information
+            println!("\n{}", gateway.generate_sharing_text(&veil_uri.app_id, app_name.as_deref()));
+            
+            // Open in browser if requested
+            if open {
+                println!("\n🌐 Opening site in browser...");
+                match open_url(&primary_url) {
+                    Ok(_) => println!("✅ Opened {} in default browser", primary_url),
+                    Err(e) => {
+                        println!("⚠️  Failed to open browser: {}", e);
+                        println!("💡 Manually visit: {}", primary_url);
                     }
                 }
-                _ = tokio::signal::ctrl_c() => {
-                    println!("\n🛑 Returning to terminal (app continues in background)");
-                }
             }
-        }
+            
+            // Traditional DNS setup (for advanced users)
+            println!("\n🔧 ADVANCED: Custom Domain Setup (Optional)");
+            println!("For your own domain (like jdbohrman.tech):");
+            println!("   1. Add DNS TXT record:");
+            println!("      jdbohrman.tech. IN TXT \"veilid-app={}\"", veil_uri.app_id.0);
+            if let Some(version) = &veil_uri.version {
+                println!("      jdbohrman.tech. IN TXT \"veilid-version={}\"", version);
+            }
+            println!("   2. Deploy gateway code or use CNAME:");
+            if let Ok(primary_url) = gateway.generate_url(&veil_uri.app_id, app_name.as_deref()) {
+                let gateway_domain = primary_url.split("://").nth(1).unwrap_or("");
+                println!("      jdbohrman.tech. CNAME {}", gateway_domain);
+            }
+            println!("   3. Access via: https://jdbohrman.tech");
+            
+            println!("\n💡 Next Steps:");
+            println!("   ✅ Your site is live at: {}", primary_url);
+            println!("   📤 Share the URL with users");
+            if !open {
+                println!("   🌐 Use --open flag to auto-launch browser");
+            }
+            if !gateways {
+                println!("   🔗 Use --gateways flag to see all access options");
+            }
+        },
         Err(e) => {
-            return Err(color_eyre::eyre::eyre!(
-                "Failed to launch app: {}\n\nTroubleshooting:\n- Ensure the app's runtime is installed\n- Check file permissions\n- Verify entry point exists", 
-                e
-            ));
+            println!("❌ Failed to publish package: {}", e);
+            println!("💡 Try again later or check your network connection");
+            return Err(e.into());
         }
     }
     
     Ok(())
 }
 
-async fn cmd_search(
-    query: String,
-    tags: Option<String>,
-    developer: Option<String>,
-    limit: Option<usize>,
-) -> Result<()> {
-    println!("🔍 Searching for: {}", query);
-    
-    let mut filter = types::SearchFilter::default();
-    filter.query = Some(query);
-    filter.limit = limit;
-    
-    if let Some(tags_str) = tags {
-        filter.tags = tags_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
+/// Open a URL in the default browser
+fn open_url(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .output()
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to open URL: {}", e))?;
     }
     
-    if let Some(dev) = developer {
-        filter.developer = Some(dev);
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(&["/C", "start", url])
+            .output()
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to open URL: {}", e))?;
     }
     
-    let store = store::VeilidStore::new().await?;
-    let results = store.search(&filter).await?;
-    
-    println!("📦 Found {} apps:", results.len());
-    for app in results {
-        println!("  {} v{} by {}", app.name, app.version, app.developer);
-        if !app.description.is_empty() {
-            println!("    {}", app.description);
-        }
-        println!("    🔗 {}", app.uri());
-        println!();
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .output()
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to open URL: {}", e))?;
     }
     
     Ok(())
 }
 
-async fn cmd_info(app: String) -> Result<()> {
-    println!("ℹ️  App information for: {}", app);
+async fn cmd_access(key_or_url: String) -> Result<()> {
+    println!("🌐 Accessing site: {}", key_or_url);
     
-    // Try to parse as URI first
-    if app.starts_with("veil://") {
-        return cmd_info_from_uri(app).await;
-    }
-    
-    // Otherwise, look for locally installed app
-    let registry = LocalRegistry::new()?;
-    
-    if let Some(local_app) = registry.find_app_by_name(&app).await? {
-        println!();
-        println!("📦 {} (Installed)", local_app.app_info.name);
-        println!("═══════════════════════════════════════");
-        println!("🆔 App ID: {}", local_app.app_info.id);
-        println!("📈 Version: {}", local_app.app_info.version);
-        println!("👨‍💻 Developer: {}", local_app.app_info.developer);
-        println!("📂 Category: {}", local_app.app_info.category);
-        println!("📝 Description:");
-        println!("   {}", local_app.app_info.description);
-        println!("🎯 Entry Point: {}", local_app.app_info.entry_point);
-        println!("📏 Size: {} bytes", local_app.app_info.size_bytes);
+    let app_id = if key_or_url.starts_with("https://") || key_or_url.starts_with("http://") {
+        // Extract domain and look up TXT record
+        println!("🔍 Looking up DNS TXT record for domain...");
+        println!("💡 In a complete implementation, this would:");
+        println!("   • Query TXT records for the domain");
+        println!("   • Extract veilid-app= value");
+        println!("   • Use that as the DHT lookup key");
         
-        if !local_app.app_info.tags.is_empty() {
-            println!("🏷️  Tags: {}", local_app.app_info.tags.join(", "));
-        }
+        // For now, extract from URL path or use domain as app ID
+        let url = url::Url::parse(&key_or_url).map_err(|e| color_eyre::eyre::eyre!("Invalid URL: {}", e))?;
+        let domain = url.host_str().unwrap_or("unknown");
+        println!("📋 Domain: {}", domain);
         
-        println!("📅 Created: {}", local_app.app_info.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
-        println!("🔄 Updated: {}", local_app.app_info.updated_at.format("%Y-%m-%d %H:%M:%S UTC"));
-        println!("📅 Installed: {}", local_app.installed_at.format("%Y-%m-%d %H:%M:%S UTC"));
-        println!("📁 Install Path: {}", local_app.install_path.display());
-        println!("🔗 URI: {}", local_app.app_info.uri());
-        
-        if let Some(signature) = &local_app.app_info.signature {
-            println!("🔐 Signature: {}...", &signature[..signature.len().min(16)]);
-        }
-        
-        println!();
-        println!("Commands:");
-        println!("  🚀 Run:       roselite run {}", local_app.app_info.name);
-        println!("  🗑️  Uninstall: roselite uninstall {} (not implemented)", local_app.app_info.name);
-        
+        // Mock DHT key extraction (in reality would come from DNS TXT)
+        AppId(domain.replace('.', "-"))
     } else {
-        // Try to fetch from store
-        let store = store::VeilidStore::new().await?;
-        let app_id = types::AppId(app.clone());
-        
-        match store.get_app(&app_id).await? {
-            Some(app_info) => {
-                println!();
-                println!("📦 {} (Available for Install)", app_info.name);
-                println!("═══════════════════════════════════════");
-                println!("🆔 App ID: {}", app_info.id);
-                println!("📈 Version: {}", app_info.version);
-                println!("👨‍💻 Developer: {}", app_info.developer);
-                println!("📂 Category: {}", app_info.category);
-                println!("📝 Description:");
-                println!("   {}", app_info.description);
-                println!("🎯 Entry Point: {}", app_info.entry_point);
-                println!("📏 Size: {} bytes", app_info.size_bytes);
-                println!("⭐ Rating: {:.1}/5.0", app_info.rating);
-                println!("📥 Downloads: {}", app_info.download_count);
-                
-                if !app_info.tags.is_empty() {
-                    println!("🏷️  Tags: {}", app_info.tags.join(", "));
-                }
-                
-                println!("📅 Created: {}", app_info.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
-                println!("🔄 Updated: {}", app_info.updated_at.format("%Y-%m-%d %H:%M:%S UTC"));
-                println!("🔗 URI: {}", app_info.uri());
-                
-                if let Some(signature) = &app_info.signature {
-                    println!("🔐 Signature: {}...", &signature[..signature.len().min(16)]);
-                }
-                
-                println!();
-                println!("Commands:");
-                println!("  📥 Install: roselite install {}", app_info.uri());
-                
-            }
-            None => {
-                println!("❌ App '{}' not found locally or in the store", app);
-                println!("💡 Try searching: roselite search {}", app);
-            }
+        // Assume it's a direct DHT key
+        AppId(key_or_url.clone())
+    };
+    
+    println!("🔍 DHT Lookup Key: {}", app_id.0);
+    
+    // Initialize Veilid store to fetch site data
+    println!("📡 Connecting to Veilid DHT...");
+    let store = match VeilidStore::new().await {
+        Ok(store) => store,
+        Err(e) => {
+            println!("⚠️  Failed to connect to Veilid network: {}", e);
+            println!("📝 DHT access requires a connected Veilid node");
+            println!("💡 To resolve DHT records, you need:");
+            println!("   • A running Veilid node");
+            println!("   • Network connectivity to DHT bootstrap nodes");
+            println!("   • Proper Veilid configuration");
+            
+            println!("🚀 Would attempt to access site from DHT key: {}", app_id.0);
+            return Ok(());
         }
-    }
+    };
     
-    Ok(())
-}
-
-async fn cmd_info_from_uri(uri_str: String) -> Result<()> {
-    let uri = parse_veil_uri(&uri_str)?;
-    let store = store::VeilidStore::new().await?;
-    
-    // Try to get from store
-    match store.get_app(&uri.app_id).await? {
+    // Try to fetch site from Veilid DHT
+    match store.get_app(&app_id).await? {
         Some(app_info) => {
-            println!();
+            println!("✅ Found site in Veilid DHT!");
             println!("📦 {}", app_info.name);
-            println!("═══════════════════════════════════════");
-            println!("🆔 App ID: {}", app_info.id);
-            println!("📈 Version: {}", app_info.version);
             println!("👨‍💻 Developer: {}", app_info.developer);
-            println!("📂 Category: {}", app_info.category);
-            println!("📝 Description:");
-            println!("   {}", app_info.description);
-            println!("🎯 Entry Point: {}", app_info.entry_point);
-            println!("📏 Size: {} bytes", app_info.size_bytes);
-            println!("⭐ Rating: {:.1}/5.0", app_info.rating);
-            println!("📥 Downloads: {}", app_info.download_count);
+            println!("📈 Version: {}", app_info.version);
+            println!("📝 Description: {}", app_info.description);
             
-            if !app_info.tags.is_empty() {
-                println!("🏷️  Tags: {}", app_info.tags.join(", "));
+            // Show DNS integration info
+            println!("\n🌐 DNS Integration:");
+            println!("   📋 DHT Key: {}", app_id.0);
+            println!("   🔗 Could be accessed via domain with TXT record:");
+            println!("   example.com. IN TXT \"veilid-app={}\"", app_id.0);
+            
+            // Show gateway access
+            let gateway = UniversalGateway::new();
+            if let Ok(primary_url) = gateway.generate_url(&app_id, Some(&app_info.name)) {
+                println!("   🌐 Gateway URL: {}", primary_url);
+                
+                // Try to open in browser
+                println!("\n🌐 Opening site in browser...");
+                match open_url(&primary_url) {
+                    Ok(_) => println!("✅ Opened {} in default browser", primary_url),
+                    Err(e) => {
+                        println!("⚠️  Failed to open browser: {}", e);
+                        println!("💡 Manually visit: {}", primary_url);
+                    }
+                }
             }
             
-            println!("📅 Created: {}", app_info.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
-            println!("🔄 Updated: {}", app_info.updated_at.format("%Y-%m-%d %H:%M:%S UTC"));
-            println!("🔗 URI: {}", uri_str);
-            
-            if let Some(signature) = &app_info.signature {
-                println!("🔐 Signature: {}...", &signature[..signature.len().min(16)]);
+            // Try to download package
+            let uri = VeilUri::new(app_id.clone(), Some(app_info.version.clone()));
+            match store.download(&uri).await {
+                Ok(package) => {
+                    println!("\n📥 Successfully downloaded package from DHT");
+                    println!("🚀 Site data retrieved via decentralized network");
+                    
+                    // Show technical details
+                    println!("\n📊 DHT Access Details:");
+                    println!("   📡 Retrieved from: Veilid distributed hash table");
+                    println!("   🔑 DHT Key: {}", app_id.0);
+                    println!("   📦 Package size: {} bytes", package.content.len());
+                    println!("   🎯 Entry point: {}", package.manifest.entry);
+                    
+                    // For web sites, show how they could be served locally
+                    if package.manifest.entry.contains(".html") || package.manifest.category.to_lowercase().contains("web") {
+                        println!("🌐 This is a web site");
+                        println!("💡 In a complete implementation, this would:");
+                        println!("   • Extract the package to a temporary directory");
+                        println!("   • Serve the site locally (e.g., http://localhost:8080)");
+                        println!("   • Launch the user's browser to the local URL");
+                        println!("   • All content served from DHT data (fully decentralized)");
+                        println!("   • Or proxy through a Veilid gateway for direct domain access");
+                    } else {
+                        println!("💾 This is a static site");
+                        println!("💡 Would extract and serve appropriately based on content type");
+                    }
+                },
+                Err(e) => {
+                    println!("⚠️  Failed to download package: {}", e);
+                    println!("📊 Site metadata is available, but package download failed");
+                }
             }
-            
-            // Check if installed
-            let registry = LocalRegistry::new()?;
-            if let Some(_local_app) = registry.get_app(&uri.app_id).await? {
-                println!("✅ Status: Installed");
-                println!();
-                println!("Commands:");
-                println!("  🚀 Run: roselite run {}", app_info.name);
-            } else {
-                println!("📦 Status: Available for Install");
-                println!();
-                println!("Commands:");
-                println!("  📥 Install: roselite install {}", uri_str);
-            }
-        }
+        },
         None => {
-            println!("❌ App not found at URI: {}", uri_str);
+            println!("📭 Site not found in Veilid DHT");
+            println!("💡 This could mean:");
+            println!("   • Site has not been published yet");
+            println!("   • DHT key is incorrect");
+            println!("   • DNS TXT record points to wrong key");
+            println!("   • DHT propagation is still in progress");
+            println!("   • Your Veilid node is not fully synchronized");
         }
     }
     

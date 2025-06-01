@@ -88,14 +88,20 @@ impl Default for VeilidConfig {
     fn default() -> Self {
         Self {
             program_name: "roselite".to_string(),
-            namespace: "roselite-appstore".to_string(),
-            table_name: "roselite_packages".to_string(),
+            namespace: "roselite".to_string(),
+            table_name: "roselite_sites".to_string(),
             use_fallback_storage: false,
             network: NetworkConfig::default(),
             storage: StorageConfig::default(),
             bootstrap_nodes: vec![
-                "bootstrap.veilid.net".to_string(),
-                "bootstrap.dev.veilid.net".to_string(),
+                // Use DNS-based bootstrap nodes from Veilid documentation
+                "bootstrap.veilid.net:5150".to_string(),
+                "bootstrap.dev.veilid.net:5150".to_string(),
+                // Additional public nodes from the slides/documentation
+                "178.68.166.46:5158".to_string(),
+                "161.35.164.16:5158".to_string(),
+                "159.89.163.27:5158".to_string(),
+                "159.223.237.84:5158".to_string(),
             ],
             development_mode: true, // Default to dev mode for easier setup
         }
@@ -579,10 +585,43 @@ impl VeilidConnection {
             .ok_or_else(|| RoseliteError::Veilid(VeilidError::ConnectionFailed))
     }
 
+    /// Attach to the Veilid network with retry logic
+    async fn attach_with_retry(&self, api: &veilid_core::VeilidAPI) -> Result<()> {
+        const MAX_RETRIES: u32 = 3;
+        const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+        
+        for attempt in 1..=MAX_RETRIES {
+            tracing::info!("Attempting to attach to Veilid network (attempt {}/{})", attempt, MAX_RETRIES);
+            
+            match api.attach().await {
+                Ok(_) => {
+                    tracing::info!("Successfully attached to Veilid network");
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to attach to network on attempt {}: {:?}", attempt, e);
+                    
+                    if attempt < MAX_RETRIES {
+                        tracing::info!("Retrying in {:?}...", RETRY_DELAY);
+                        tokio::time::sleep(RETRY_DELAY).await;
+                    } else {
+                        tracing::error!("Failed to attach to network after {} attempts", MAX_RETRIES);
+                        return Err(RoseliteError::Veilid(VeilidError::ConnectionFailed));
+                    }
+                }
+            }
+        }
+        
+        unreachable!("Loop should have returned or errored")
+    }
+
     /// Initialize Veilid API with enhanced configuration
     async fn init_veilid_api(&self) -> Result<Arc<veilid_core::VeilidAPI>> {
         // Create enhanced configuration for Veilid
         let config_json = self.build_veilid_config()?;
+        
+        // Debug: log the configuration being used
+        tracing::debug!("Veilid configuration JSON: {}", config_json);
 
         // Create update callback
         let update_callback = Arc::new({
@@ -601,7 +640,15 @@ impl VeilidConnection {
             config_json,
         )
         .await
-        .map_err(|_e| RoseliteError::Veilid(VeilidError::ConnectionFailed))?;
+        .map_err(|e| {
+            tracing::error!("Failed to start Veilid API: {:?}", e);
+            tracing::error!("This could be due to:");
+            tracing::error!("  • Invalid JSON configuration format");
+            tracing::error!("  • Missing or invalid bootstrap nodes");
+            tracing::error!("  • Network connectivity issues");
+            tracing::error!("  • Invalid data directory permissions");
+            RoseliteError::Veilid(VeilidError::ConnectionFailed)
+        })?;
             
         // Attach to the network with retry logic
         self.attach_with_retry(&api).await?;
@@ -621,17 +668,15 @@ impl VeilidConnection {
             "protected_store": {
                 "allow_insecure_fallback": self.config.development_mode,
                 "always_use_insecure_storage": self.config.development_mode,
-                "directory": self.config.storage.data_directory,
-                "delete": false,
-                "device_encryption_key_password": null,
-                "new_device_encryption_key_password": null
+                "directory": self.config.storage.data_directory.as_deref().unwrap_or(""),
+                "delete": false
             },
             "table_store": {
-                "directory": self.config.storage.data_directory,
+                "directory": self.config.storage.data_directory.as_deref().unwrap_or(""),
                 "delete": false
             },
             "block_store": {
-                "directory": self.config.storage.data_directory,
+                "directory": self.config.storage.data_directory.as_deref().unwrap_or(""),
                 "delete": false
             },
             "network": {
@@ -644,10 +689,7 @@ impl VeilidConnection {
                 "client_allowlist_timeout_ms": 300000,
                 "reverse_connection_receipt_time_ms": 5000,
                 "hole_punch_receipt_time_ms": 5000,
-                "network_key_password": null,
                 "routing_table": {
-                    "node_id": null,
-                    "node_id_secret": null,
                     "bootstrap": self.config.bootstrap_nodes,
                     "limit_over_attached": 64,
                     "limit_fully_attached": 32,
@@ -689,82 +731,51 @@ impl VeilidConnection {
                 "detect_address_changes": self.config.network.enable_nat_detection,
                 "restricted_nat_retries": 3,
                 "tls": {
-                    "certificate_path": null,
-                    "private_key_path": null,
                     "connection_initial_timeout_ms": self.config.network.connection_timeout_ms
                 },
                 "application": {
                     "https": {
                         "enabled": false,
                         "listen_address": "",
-                        "path": "",
-                        "url": null
+                        "path": ""
                     },
                     "http": {
                         "enabled": false,
                         "listen_address": "",
-                        "path": "",
-                        "url": null
+                        "path": ""
                     }
                 },
                 "protocol": {
                     "udp": {
                         "enabled": true,
                         "socket_pool_size": 0,
-                        "listen_address": self.config.network.udp_listen_address.as_deref().unwrap_or(""),
-                        "public_address": null
+                        "listen_address": self.config.network.udp_listen_address.as_deref().unwrap_or("")
                     },
                     "tcp": {
                         "connect": true,
                         "listen": true,
                         "max_connections": self.config.network.max_connections,
-                        "listen_address": self.config.network.tcp_listen_address.as_deref().unwrap_or(""),
-                        "public_address": null
+                        "listen_address": self.config.network.tcp_listen_address.as_deref().unwrap_or("")
                     },
                     "ws": {
                         "connect": true,
                         "listen": true,
                         "max_connections": self.config.network.max_connections / 2,
                         "listen_address": self.config.network.ws_listen_address.as_deref().unwrap_or(""),
-                        "path": "ws",
-                        "url": null
+                        "path": "ws"
                     },
                     "wss": {
                         "connect": true,
                         "listen": false,
                         "max_connections": self.config.network.max_connections / 4,
                         "listen_address": "",
-                        "path": "wss",
-                        "url": null
+                        "path": "wss"
                     }
                 }
             }
         });
 
         Ok(config_json.to_string())
-    }
-
-    /// Attach to network with retry logic
-    async fn attach_with_retry(&self, api: &veilid_core::VeilidAPI) -> Result<()> {
-        const MAX_RETRIES: u32 = 3;
-        const RETRY_DELAY_MS: u64 = 2000;
-        
-        for attempt in 1..=MAX_RETRIES {
-            match api.attach().await {
-                Ok(()) => {
-                    tracing::info!("Successfully attached to Veilid network on attempt {}", attempt);
-                    return Ok(());
-                },
-                Err(e) => {
-                    tracing::warn!("Failed to attach to network (attempt {}): {:?}", attempt, e);
-                    if attempt < MAX_RETRIES {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS)).await;
-                    }
-                }
-            }
-        }
-        
-        Err(RoseliteError::Veilid(VeilidError::ConnectionFailed))
     }
 
     /// Enhanced Veilid update callback handler with state management

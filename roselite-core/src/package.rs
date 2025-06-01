@@ -9,6 +9,7 @@ use crate::types::*;
 use crate::crypto::CryptoManager;
 use std::io::{Read, Write};
 use chrono::{DateTime, Utc};
+use std::io::Cursor;
 
 /// Package manifest structure (veilid.json)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,6 +173,58 @@ impl Package {
         }
         
         Ok(())
+    }
+
+    /// Extract individual files from the package for direct serving
+    pub async fn extract_files(&self) -> Result<std::collections::HashMap<String, Vec<u8>>> {
+        let mut files = std::collections::HashMap::new();
+        
+        // Decompress the package
+        let decoder = GzDecoder::new(Cursor::new(&self.content));
+        let mut archive = Archive::new(decoder);
+        
+        // Extract all files
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let path = entry.path()?.to_path_buf();
+            
+            // Skip the manifest file since it's metadata
+            if path.file_name().and_then(|n| n.to_str()) == Some(crate::MANIFEST_FILENAME) {
+                continue;
+            }
+            
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content)?;
+            
+            // Use forward slashes for web compatibility
+            let web_path = path.to_string_lossy().replace('\\', "/");
+            files.insert(web_path, content);
+        }
+        
+        Ok(files)
+    }
+
+    /// Get the entry point file content directly
+    pub async fn get_entry_file(&self) -> Result<Vec<u8>> {
+        let files = self.extract_files().await?;
+        
+        files.get(&self.manifest.entry)
+            .cloned()
+            .ok_or_else(|| PackageError::InvalidManifest {
+                reason: format!("Entry file '{}' not found in package", self.manifest.entry)
+            }.into())
+    }
+
+    /// Get a specific file from the package
+    pub async fn get_file(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        let files = self.extract_files().await?;
+        Ok(files.get(path).cloned())
+    }
+
+    /// List all files in the package
+    pub async fn list_files(&self) -> Result<Vec<String>> {
+        let files = self.extract_files().await?;
+        Ok(files.keys().cloned().collect())
     }
 }
 

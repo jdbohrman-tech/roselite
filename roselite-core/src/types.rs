@@ -73,6 +73,16 @@ impl AppInfo {
     pub fn uri_latest(&self) -> VeilUri {
         VeilUri::new(self.id.clone(), None)
     }
+    
+    /// Generate HTTPS access URL for web compatibility
+    pub fn access_url(&self) -> String {
+        format!("https://www.roselite.app/access/{}/{}", self.id.0, self.version)
+    }
+    
+    /// Generate HTTPS access URL for latest version
+    pub fn access_url_latest(&self) -> String {
+        format!("https://www.roselite.app/access/{}", self.id.0)
+    }
 }
 
 /// Search filters for app discovery
