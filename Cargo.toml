@@ -15,7 +15,7 @@ repository = "https://github.com/jdbohrman-tech/roselite"
 description = "Decentralized app store for Veilid network"
 
 [workspace.dependencies]
-roselite-core = { path = "crates/roselite-core" }
+roselite-core = { path = "roselite-core" }
 
 # Core async runtime
 tokio = { version = "1.0", features = ["full", "tracing"] }
