@@ -41,6 +41,31 @@
   background-color: transparent !important;
 }
 
+/* Override any slate theme header styling */
+[data-md-color-scheme="slate"] .md-header,
+[data-md-color-scheme="slate"] .md-header[data-md-state="shadow"],
+[data-md-color-scheme="slate"] .md-header__inner {
+  background-color: transparent !important;
+  background: transparent !important;
+}
+
+/* Override default theme header styling */
+[data-md-color-scheme="default"] .md-header,
+[data-md-color-scheme="default"] .md-header[data-md-state="shadow"],
+[data-md-color-scheme="default"] .md-header__inner {
+  background-color: transparent !important;
+  background: transparent !important;
+}
+
+/* Force transparency for all possible header states */
+.md-header,
+.md-header *,
+.md-header::before,
+.md-header::after {
+  background-color: transparent !important;
+  background: transparent !important;
+}
+
 .md-header__button {
   color: white !important;
 }
