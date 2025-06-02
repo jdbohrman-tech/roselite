@@ -2,54 +2,20 @@
 .mdx-hero {
   overflow: hidden;
   color: var(--md-primary-bg-color);
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: url('../assets/hero.png') center/cover no-repeat;
   position: relative;
 }
 
 .mdx-hero__image {
-  background-image: 
-    radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 50%), 
-    radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.15) 0%, transparent 50%), 
-    radial-gradient(circle at 40% 40%, rgba(120, 119, 198, 0.2) 0%, transparent 50%);
-  background-size: 200% 200%, 300% 300%, 250% 250%;
-  background-position: 60% 30%, 40% 70%, 80% 20%;
   min-height: 26rem;
   position: relative;
+  background: rgba(0, 0, 0, 0.4); /* Dark overlay for better text readability */
 }
 
-/* Crystal-like geometric shapes */
-.mdx-hero__image::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-image: 
-    polygon(40% 20%, 70% 20%, 90% 60%, 50% 80%, 10% 60%),
-    polygon(20% 40%, 40% 30%, 60% 50%, 40% 70%, 20% 60%),
-    polygon(60% 10%, 80% 30%, 90% 50%, 70% 70%, 50% 50%);
-  background-size: 300px 200px, 250px 180px, 200px 150px;
-  background-position: -50px 50px, 80% 20%, 20% 80%;
-  background-repeat: no-repeat;
-  opacity: 0.1;
-  pointer-events: none;
-}
-
-/* Additional crystalline effect */
+/* Remove the old gradient and crystal effects since we're using a background image */
+.mdx-hero__image::before,
 .mdx-hero__image::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: 
-    linear-gradient(45deg, transparent 40%, rgba(255, 255, 255, 0.05) 50%, transparent 60%),
-    linear-gradient(-45deg, transparent 40%, rgba(255, 255, 255, 0.05) 50%, transparent 60%);
-  background-size: 60px 60px, 80px 80px;
-  animation: crystalline 20s ease-in-out infinite;
-  pointer-events: none;
+  display: none;
 }
 
 @keyframes crystalline {

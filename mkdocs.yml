@@ -68,8 +68,8 @@ theme:
     text: Roboto
     code: Roboto Mono
   favicon: assets/favicon.png
+  logo: assets/logo.svg
   icon:
-    logo: material/crystal-ball
     repo: fontawesome/brands/github
 
 plugins:
