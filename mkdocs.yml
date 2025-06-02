@@ -1,8 +1,8 @@
 site_name: Roselite Documentation
 site_description: P2P Static Site Hosting using Veilid DHT
-site_url: https://jdbohrman.github.io/roselite/
-repo_url: https://github.com/jdbohrman/roselite
-repo_name: jdbohrman/roselite
+site_url: https://jdbohrman-tech.github.io/roselite/
+repo_url: https://github.com/jdbohrman-tech/roselite
+repo_name: jdbohrman-tech/roselite
 
 docs_dir: .
 site_dir: ../site

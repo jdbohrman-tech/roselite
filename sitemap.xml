@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
-         <loc>https://jdbohrman.github.io/roselite/</loc>
+         <loc>https://jdbohrman-tech.github.io/roselite/</loc>
          <lastmod>2025-06-02</lastmod>
     </url>
     <url>
-         <loc>https://jdbohrman.github.io/roselite/cli/</loc>
+         <loc>https://jdbohrman-tech.github.io/roselite/cli/</loc>
          <lastmod>2025-06-02</lastmod>
     </url>
     <url>
-         <loc>https://jdbohrman.github.io/roselite/installation/</loc>
+         <loc>https://jdbohrman-tech.github.io/roselite/installation/</loc>
          <lastmod>2025-06-02</lastmod>
     </url>
     <url>
-         <loc>https://jdbohrman.github.io/roselite/publishing/</loc>
+         <loc>https://jdbohrman-tech.github.io/roselite/publishing/</loc>
          <lastmod>2025-06-02</lastmod>
     </url>
     <url>
-         <loc>https://jdbohrman.github.io/roselite/quickstart/</loc>
+         <loc>https://jdbohrman-tech.github.io/roselite/quickstart/</loc>
          <lastmod>2025-06-02</lastmod>
     </url>
 </urlset>
