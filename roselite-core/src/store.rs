@@ -39,14 +39,32 @@ impl VeilidStore {
         Ok(Self { veilid })
     }
     
-    /// Generate DHT key for app storage
-    fn app_key(app_id: &AppId, version: &str) -> String {
-        format!("roselite:app:{}:{}", app_id, version)
+    /// Properly shutdown the Veilid connection
+    pub async fn shutdown(&mut self) -> Result<()> {
+        tracing::info!("Shutting down VeilidStore...");
+        self.veilid.disconnect().await?;
+        tracing::info!("VeilidStore shutdown complete");
+        Ok(())
     }
     
-    /// Generate DHT key for app metadata
-    fn metadata_key(app_id: &AppId) -> String {
-        format!("roselite:metadata:{}", app_id)
+    /// Generate DHT key for app storage using slug
+    fn app_key(slug: &str, version: &str) -> String {
+        format!("roselite:app:{}:{}", slug, version)
+    }
+    
+    /// Generate DHT key for app metadata using slug
+    fn metadata_key(slug: &str) -> String {
+        format!("roselite:metadata:{}", slug)
+    }
+    
+    /// Generate DHT key for slug-to-name mapping
+    fn slug_mapping_key() -> String {
+        "roselite:slug_mapping".to_string()
+    }
+    
+    /// Generate DHT key for name-to-slug mapping
+    fn name_mapping_key() -> String {
+        "roselite:name_mapping".to_string()
     }
     
     /// Generate DHT key for the app index
@@ -59,7 +77,7 @@ impl VeilidStore {
         "roselite:featured".to_string()
     }
     
-    /// Add app to the global index
+    /// Add app to the global index and mapping tables
     async fn add_to_index(&mut self, app_info: &AppInfo) -> Result<()> {
         let index_key = Self::index_key();
         
@@ -70,14 +88,34 @@ impl VeilidStore {
             None => HashMap::new(),
         };
         
-        // Add/update app in index
-        app_index.insert(app_info.id.0.clone(), app_info.clone());
+        // Add/update app in index (use slug as key)
+        app_index.insert(app_info.slug.clone(), app_info.clone());
         
-        // Serialize and store updated index
-        let serialized = serde_json::to_vec(&app_index)
+        // Update slug-to-name mapping
+        let mut slug_mapping: HashMap<String, String> = match self.veilid.dht_get(&Self::slug_mapping_key()).await? {
+            Some(data) => serde_json::from_slice(&data).unwrap_or_default(),
+            None => HashMap::new(),
+        };
+        slug_mapping.insert(app_info.slug.clone(), app_info.name.clone());
+        
+        // Update name-to-slug mapping
+        let mut name_mapping: HashMap<String, String> = match self.veilid.dht_get(&Self::name_mapping_key()).await? {
+            Some(data) => serde_json::from_slice(&data).unwrap_or_default(),
+            None => HashMap::new(),
+        };
+        name_mapping.insert(app_info.name.clone(), app_info.slug.clone());
+        
+        // Serialize and store all updates
+        let serialized_index = serde_json::to_vec(&app_index)
             .map_err(|e| RoseliteError::SerializationError(format!("Failed to serialize app index: {}", e)))?;
+        let serialized_slug_mapping = serde_json::to_vec(&slug_mapping)
+            .map_err(|e| RoseliteError::SerializationError(format!("Failed to serialize slug mapping: {}", e)))?;
+        let serialized_name_mapping = serde_json::to_vec(&name_mapping)
+            .map_err(|e| RoseliteError::SerializationError(format!("Failed to serialize name mapping: {}", e)))?;
         
-        self.veilid.dht_set(&index_key, &serialized).await?;
+        self.veilid.dht_set(&index_key, &serialized_index).await?;
+        self.veilid.dht_set(&Self::slug_mapping_key(), &serialized_slug_mapping).await?;
+        self.veilid.dht_set(&Self::name_mapping_key(), &serialized_name_mapping).await?;
         
         Ok(())
     }
@@ -94,6 +132,39 @@ impl VeilidStore {
             }
             None => Ok(HashMap::new()),
         }
+    }
+    
+    /// Resolve any identifier (name, slug, or app ID) to a slug
+    async fn resolve_to_slug(&self, identifier: &str) -> Result<Option<String>> {
+        // First check if it's already a slug by looking in the slug mapping
+        let slug_mapping: HashMap<String, String> = match self.veilid.dht_get(&Self::slug_mapping_key()).await? {
+            Some(data) => serde_json::from_slice(&data).unwrap_or_default(),
+            None => HashMap::new(),
+        };
+        
+        if slug_mapping.contains_key(identifier) {
+            return Ok(Some(identifier.to_string()));
+        }
+        
+        // Check if it's a name that maps to a slug
+        let name_mapping: HashMap<String, String> = match self.veilid.dht_get(&Self::name_mapping_key()).await? {
+            Some(data) => serde_json::from_slice(&data).unwrap_or_default(),
+            None => HashMap::new(),
+        };
+        
+        if let Some(slug) = name_mapping.get(identifier) {
+            return Ok(Some(slug.clone()));
+        }
+        
+        // If not found in mappings, it might be an app ID, check the index
+        let app_index = self.get_app_index().await?;
+        for app_info in app_index.values() {
+            if app_info.id.0 == identifier {
+                return Ok(Some(app_info.slug.clone()));
+            }
+        }
+        
+        Ok(None)
     }
 }
 
@@ -156,7 +227,14 @@ impl AppStore for VeilidStore {
     }
     
     async fn get_app(&self, app_id: &AppId) -> Result<Option<AppInfo>> {
-        let metadata_key = Self::metadata_key(app_id);
+        // Resolve the identifier to a slug
+        let slug = match self.resolve_to_slug(&app_id.0).await? {
+            Some(slug) => slug,
+            None => return Ok(None),
+        };
+        
+        // Look up by slug
+        let metadata_key = Self::metadata_key(&slug);
         
         match self.veilid.dht_get(&metadata_key).await? {
             Some(data) => {
@@ -177,10 +255,18 @@ impl AppStore for VeilidStore {
     }
     
     async fn publish(&mut self, package: Package) -> Result<VeilUri> {
+        // Generate slug if not provided
+        let slug = if package.manifest.slug.is_empty() {
+            Package::generate_slug(&package.manifest.name)
+        } else {
+            package.manifest.slug.clone()
+        };
+        
         // Create app info from package
         let app_info = AppInfo {
-            id: AppId(package.manifest.name.clone()),
+            id: AppId(slug.clone()), // Use slug as the app ID
             name: package.manifest.name.clone(),
+            slug: slug.clone(),
             version: package.manifest.version.clone(),
             description: package.manifest.description.clone(),
             developer: package.manifest.developer.clone(),
@@ -196,36 +282,42 @@ impl AppStore for VeilidStore {
             signature: Some("placeholder_signature".to_string()),
         };
         
-        // Store package data
+        // Store package data using slug
         let package_data = serde_json::to_vec(&package)
             .map_err(|e| RoseliteError::SerializationError(format!("Failed to serialize package: {}", e)))?;
         
-        let package_key = Self::app_key(&app_info.id, &app_info.version);
+        let package_key = Self::app_key(&slug, &app_info.version);
         self.veilid.dht_set(&package_key, &package_data).await?;
         
-        // Store app metadata
+        // Store app metadata using slug
         let app_data = serde_json::to_vec(&app_info)
             .map_err(|e| RoseliteError::SerializationError(format!("Failed to serialize app info: {}", e)))?;
         
-        let metadata_key = Self::metadata_key(&app_info.id);
+        let metadata_key = Self::metadata_key(&slug);
         self.veilid.dht_set(&metadata_key, &app_data).await?;
         
-        // Add to global index
+        // Add to global index and mappings
         self.add_to_index(&app_info).await?;
         
-        tracing::info!("Published app {} version {} to Veilid DHT", app_info.id, app_info.version);
+        tracing::info!("Published app {} version {} to Veilid DHT", app_info.name, app_info.version);
         
-        Ok(VeilUri::new(app_info.id, Some(app_info.version)))
+        Ok(VeilUri::new(AppId(slug), Some(app_info.version)))
     }
     
     async fn download(&self, uri: &VeilUri) -> Result<Package> {
+        // Resolve the app_id to a slug
+        let slug = match self.resolve_to_slug(&uri.app_id.0).await? {
+            Some(slug) => slug,
+            None => return Err(RoseliteError::AppNotFound(uri.app_id.to_string())),
+        };
+        
         let package_key = if let Some(version) = &uri.version {
-            Self::app_key(&uri.app_id, version)
+            Self::app_key(&slug, version)
         } else {
             // If no version specified, get latest
-            let latest_version = self.get_latest_version(&uri.app_id).await?
+            let latest_version = self.get_latest_version(&AppId(slug.clone())).await?
                 .ok_or_else(|| RoseliteError::AppNotFound(uri.app_id.to_string()))?;
-            Self::app_key(&uri.app_id, &latest_version)
+            Self::app_key(&slug, &latest_version)
         };
         
         match self.veilid.dht_get(&package_key).await? {

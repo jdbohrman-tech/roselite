@@ -3,10 +3,10 @@ use color_eyre::Result;
 use roselite_core::{
     package::{Package, PackageBuilder},
     store::{VeilidStore, AppStore},
-    types::{AppInfo, VeilUri, AppId},
+    types::{VeilUri, AppId},
 };
 use std::path::PathBuf;
-use tracing::{info, warn, debug};
+use tracing;
 use url;
 
 mod gateway;
@@ -228,7 +228,7 @@ async fn cmd_publish(package_path: PathBuf, gateways: bool, open: bool) -> Resul
     // Publish to Veilid DHT
     println!("📡 Publishing to Veilid DHT...");
     
-    match store.publish(package).await {
+    let result = match store.publish(package).await {
         Ok(veil_uri) => {
             println!("✅ Package published successfully!");
             
@@ -303,15 +303,25 @@ async fn cmd_publish(package_path: PathBuf, gateways: bool, open: bool) -> Resul
             if !gateways {
                 println!("   🔗 Use --gateways flag to see all access options");
             }
+            
+            Ok(())
         },
         Err(e) => {
             println!("❌ Failed to publish package: {}", e);
             println!("💡 Try again later or check your network connection");
-            return Err(e.into());
+            Err(e.into())
         }
+    };
+    
+    // Properly shutdown the store before returning
+    println!("\n🔄 Disconnecting from Veilid network...");
+    if let Err(e) = store.shutdown().await {
+        println!("⚠️  Warning: Failed to shutdown cleanly: {}", e);
+    } else {
+        println!("✅ Disconnected successfully");
     }
     
-    Ok(())
+    result
 }
 
 /// Open a URL in the default browser
@@ -350,7 +360,6 @@ async fn cmd_access(key_or_url: String) -> Result<()> {
         // Extract domain and look up TXT record
         println!("🔍 Looking up DNS TXT record for domain...");
         println!("💡 In a complete implementation, this would:");
-        println!("   • Query TXT records for the domain");
         println!("   • Extract veilid-app= value");
         println!("   • Use that as the DHT lookup key");
         
@@ -370,7 +379,7 @@ async fn cmd_access(key_or_url: String) -> Result<()> {
     
     // Initialize Veilid store to fetch site data
     println!("📡 Connecting to Veilid DHT...");
-    let store = match VeilidStore::new().await {
+    let mut store = match VeilidStore::new().await {
         Ok(store) => store,
         Err(e) => {
             println!("⚠️  Failed to connect to Veilid network: {}", e);
@@ -385,81 +394,105 @@ async fn cmd_access(key_or_url: String) -> Result<()> {
         }
     };
     
-    // Try to fetch site from Veilid DHT
-    match store.get_app(&app_id).await? {
-        Some(app_info) => {
-            println!("✅ Found site in Veilid DHT!");
-            println!("📦 {}", app_info.name);
-            println!("👨‍💻 Developer: {}", app_info.developer);
-            println!("📈 Version: {}", app_info.version);
-            println!("📝 Description: {}", app_info.description);
-            
-            // Show DNS integration info
-            println!("\n🌐 DNS Integration:");
-            println!("   📋 DHT Key: {}", app_id.0);
-            println!("   🔗 Could be accessed via domain with TXT record:");
-            println!("   example.com. IN TXT \"veilid-app={}\"", app_id.0);
-            
-            // Show gateway access
-            let gateway = UniversalGateway::new();
-            if let Ok(primary_url) = gateway.generate_url(&app_id, Some(&app_info.name)) {
-                println!("   🌐 Gateway URL: {}", primary_url);
+    let result = async {
+        // Try to fetch site from Veilid DHT
+        match store.get_app(&app_id).await? {
+            Some(app_info) => {
+                println!("✅ Found site in Veilid DHT!");
+                println!("📦 {}", app_info.name);
+                println!("👨‍💻 Developer: {}", app_info.developer);
+                println!("📈 Version: {}", app_info.version);
+                println!("📝 Description: {}", app_info.description);
                 
-                // Try to open in browser
-                println!("\n🌐 Opening site in browser...");
-                match open_url(&primary_url) {
-                    Ok(_) => println!("✅ Opened {} in default browser", primary_url),
+                // Show DNS integration info
+                println!("\n🌐 DNS Integration:");
+                println!("   📋 DHT Key: {}", app_id.0);
+                println!("   🔗 Could be accessed via domain with TXT record:");
+                println!("   example.com. IN TXT \"veilid-app={}\"", app_id.0);
+                
+                // Show gateway access information (but don't open browser)
+                let gateway = UniversalGateway::new();
+                if let Ok(primary_url) = gateway.generate_url(&app_id, Some(&app_info.name)) {
+                    println!("   🌐 Gateway URL: {}", primary_url);
+                    
+                    println!("\n📋 Access Information:");
+                    println!("   🔗 Direct URL: {}", primary_url);
+                    println!("   💡 You can visit this URL in any browser");
+                    println!("   🌍 Content served via Veilid DHT");
+                }
+                
+                // Try to download package and show technical details
+                let uri = VeilUri::new(app_id.clone(), Some(app_info.version.clone()));
+                match store.download(&uri).await {
+                    Ok(package) => {
+                        println!("\n📥 Successfully downloaded package from DHT");
+                        println!("🚀 Site data retrieved via decentralized network");
+                        
+                        // Show technical details
+                        println!("\n📊 DHT Access Details:");
+                        println!("   📡 Retrieved from: Veilid distributed hash table");
+                        println!("   🔑 DHT Key: {}", app_id.0);
+                        println!("   📦 Package size: {} bytes", package.content.len());
+                        println!("   🎯 Entry point: {}", package.manifest.entry);
+                        
+                        // For web sites, show how they could be served locally
+                        if package.manifest.entry.contains(".html") || package.manifest.category.to_lowercase().contains("web") {
+                            println!("\n🌐 Web Site Information:");
+                            println!("   📄 Entry point: {}", package.manifest.entry);
+                            println!("   🏷️  Category: {}", package.manifest.category);
+                            println!("   💡 In a complete implementation, this would:");
+                            println!("   • Extract the package to a temporary directory");
+                            println!("   • Serve the site locally (e.g., http://localhost:8080)");
+                            println!("   • All content served from DHT data (fully decentralized)");
+                            println!("   • Or proxy through a Veilid gateway for direct domain access");
+                        } else {
+                            println!("\n💾 Static Site Information:");
+                            println!("   💡 Would extract and serve appropriately based on content type");
+                        }
+                        
+                        println!("\n🔗 Connection Summary:");
+                        println!("   ✅ Site is accessible via DHT");
+                        println!("   🌐 Gateway URL: {}", gateway.generate_url(&app_id, Some(&app_info.name)).unwrap_or_else(|_| "unavailable".to_string()));
+                        println!("   📡 Served from: Veilid distributed network");
+                        println!("   🔄 Status: Online and available");
+                    },
                     Err(e) => {
-                        println!("⚠️  Failed to open browser: {}", e);
-                        println!("💡 Manually visit: {}", primary_url);
+                        println!("⚠️  Failed to download package: {}", e);
+                        println!("📊 Site metadata is available, but package download failed");
+                        
+                        println!("\n🔗 Connection Summary:");
+                        println!("   ⚠️  Partial access: metadata only");
+                        println!("   🌐 Gateway URL: {}", gateway.generate_url(&app_id, Some(&app_info.name)).unwrap_or_else(|_| "unavailable".to_string()));
+                        println!("   📡 Issue: Cannot retrieve full site data");
                     }
                 }
+            },
+            None => {
+                println!("📭 Site not found in Veilid DHT");
+                println!("💡 This could mean:");
+                println!("   • Site has not been published yet");
+                println!("   • DHT key is incorrect");
+                println!("   • DNS TXT record points to wrong key");
+                println!("   • DHT propagation is still in progress");
+                println!("   • Your Veilid node is not fully synchronized");
+                
+                println!("\n🔗 Connection Summary:");
+                println!("   ❌ Site not accessible");
+                println!("   📋 DHT Key: {}", app_id.0);
+                println!("   📡 Status: Not found in network");
             }
-            
-            // Try to download package
-            let uri = VeilUri::new(app_id.clone(), Some(app_info.version.clone()));
-            match store.download(&uri).await {
-                Ok(package) => {
-                    println!("\n📥 Successfully downloaded package from DHT");
-                    println!("🚀 Site data retrieved via decentralized network");
-                    
-                    // Show technical details
-                    println!("\n📊 DHT Access Details:");
-                    println!("   📡 Retrieved from: Veilid distributed hash table");
-                    println!("   🔑 DHT Key: {}", app_id.0);
-                    println!("   📦 Package size: {} bytes", package.content.len());
-                    println!("   🎯 Entry point: {}", package.manifest.entry);
-                    
-                    // For web sites, show how they could be served locally
-                    if package.manifest.entry.contains(".html") || package.manifest.category.to_lowercase().contains("web") {
-                        println!("🌐 This is a web site");
-                        println!("💡 In a complete implementation, this would:");
-                        println!("   • Extract the package to a temporary directory");
-                        println!("   • Serve the site locally (e.g., http://localhost:8080)");
-                        println!("   • Launch the user's browser to the local URL");
-                        println!("   • All content served from DHT data (fully decentralized)");
-                        println!("   • Or proxy through a Veilid gateway for direct domain access");
-                    } else {
-                        println!("💾 This is a static site");
-                        println!("💡 Would extract and serve appropriately based on content type");
-                    }
-                },
-                Err(e) => {
-                    println!("⚠️  Failed to download package: {}", e);
-                    println!("📊 Site metadata is available, but package download failed");
-                }
-            }
-        },
-        None => {
-            println!("📭 Site not found in Veilid DHT");
-            println!("💡 This could mean:");
-            println!("   • Site has not been published yet");
-            println!("   • DHT key is incorrect");
-            println!("   • DNS TXT record points to wrong key");
-            println!("   • DHT propagation is still in progress");
-            println!("   • Your Veilid node is not fully synchronized");
         }
+        
+        Ok::<(), color_eyre::eyre::Error>(())
+    }.await;
+    
+    // Properly shutdown the store before returning
+    println!("\n🔄 Disconnecting from Veilid network...");
+    if let Err(e) = store.shutdown().await {
+        println!("⚠️  Warning: Failed to shutdown cleanly: {}", e);
+    } else {
+        println!("✅ Disconnected successfully");
     }
     
-    Ok(())
+    result
 } 

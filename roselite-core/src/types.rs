@@ -50,6 +50,8 @@ impl fmt::Display for VeilUri {
 pub struct AppInfo {
     pub id: AppId,
     pub name: String,
+    #[serde(default)]
+    pub slug: String,
     pub version: String,
     pub description: String,
     pub developer: String,

@@ -22,6 +22,9 @@ pub struct PackageManifest {
     pub category: String,
     pub entry: String,
     pub tags: Vec<String>,
+    /// Human-readable URL-safe identifier (auto-generated from name if not provided)
+    #[serde(default)]
+    pub slug: String,
     pub identity: String,
     pub signature: String,
     pub format_version: String,
@@ -36,6 +39,33 @@ pub struct PackageManifest {
     /// Public key for signature verification
     #[serde(default)]
     pub public_key: String,
+}
+
+impl PackageManifest {
+    /// Generates a URL-safe slug from the app name
+    pub fn generate_slug(name: &str) -> String {
+        name.to_lowercase()
+            .chars()
+            .filter_map(|c| {
+                if c.is_alphanumeric() {
+                    Some(c)
+                } else if c.is_whitespace() || c == '-' || c == '_' {
+                    Some('-')
+                } else {
+                    None
+                }
+            })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string()
+    }
+    
+    /// Ensure the slug is set, generating it from name if needed
+    pub fn ensure_slug(&mut self) {
+        if self.slug.is_empty() {
+            self.slug = Self::generate_slug(&self.name);
+        }
+    }
 }
 
 /// App permissions for sandboxing
@@ -58,6 +88,24 @@ pub struct Package {
 }
 
 impl Package {
+    /// Generates a URL-safe slug from the app name
+    pub fn generate_slug(name: &str) -> String {
+        name.to_lowercase()
+            .chars()
+            .filter_map(|c| {
+                if c.is_alphanumeric() {
+                    Some(c)
+                } else if c.is_whitespace() || c == '-' || c == '_' {
+                    Some('-')
+                } else {
+                    None
+                }
+            })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string()
+    }
+
     /// Load package from .veilidpkg file
     pub async fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = tokio::fs::read(path).await?;
@@ -107,22 +155,30 @@ impl Package {
 
     /// Convert to app info for listings
     pub fn to_app_info(&self) -> AppInfo {
+        let now = Utc::now();
+        let identity = self.manifest.identity.clone();
+        
         AppInfo {
-            id: AppId(self.manifest.identity.clone()),
+            id: AppId(identity.clone()),
             name: self.manifest.name.clone(),
+            slug: if self.manifest.slug.is_empty() { 
+                Self::generate_slug(&self.manifest.name) 
+            } else { 
+                self.manifest.slug.clone() 
+            },
             version: self.manifest.version.clone(),
             description: self.manifest.description.clone(),
             developer: self.manifest.developer.clone(),
             category: self.manifest.category.clone(),
-            entry_point: self.manifest.entry.clone(),
-            tags: self.manifest.tags.clone(),
-            size_bytes: self.size_bytes,
-            created_at: self.manifest.created_at,
-            updated_at: self.manifest.updated_at,
-            veilid_identity: Some(self.manifest.identity.clone()),
-            signature: Some(self.manifest.signature.clone()),
+            size_bytes: self.content.len() as u64,
             download_count: 0,
             rating: 0.0,
+            created_at: now,
+            updated_at: now,
+            tags: self.manifest.tags.clone(),
+            entry_point: self.manifest.entry.clone(),
+            veilid_identity: Some(identity),
+            signature: None,
         }
     }
 
@@ -237,6 +293,7 @@ pub struct PackageBuilder {
     entry: String,
     tags: Vec<String>,
     source_dir: std::path::PathBuf,
+    slug: Option<String>,
     identity: Option<String>,
     private_key: Option<String>,
     public_key: Option<String>,
@@ -252,6 +309,7 @@ impl PackageBuilder {
             entry: "index.html".to_string(),
             tags: Vec::new(),
             source_dir: source_dir.as_ref().to_path_buf(),
+            slug: None,
             identity: None,
             private_key: None,
             public_key: None,
@@ -280,6 +338,11 @@ impl PackageBuilder {
 
     pub fn tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
+        self
+    }
+
+    pub fn slug(mut self, slug: String) -> Self {
+        self.slug = Some(slug);
         self
     }
 
@@ -328,6 +391,7 @@ impl PackageBuilder {
             created_at: now,
             updated_at: now,
             public_key: public_key.clone(),
+            slug: String::new(),
         };
 
         // Create tarball from source directory
@@ -534,6 +598,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             public_key: "test-key".to_string(),
+            slug: String::new(),
         };
         
         assert!(Package::validate_manifest(&valid_manifest).is_ok());

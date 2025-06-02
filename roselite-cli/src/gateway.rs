@@ -74,6 +74,18 @@ impl UniversalGateway {
         Ok(format!("{}://{}.{}", protocol, subdomain, self.config.domain))
     }
 
+    /// Generate a gateway URL using slug if available
+    pub fn generate_url_with_slug(&self, app_id: &AppId, slug: Option<&str>, app_name: Option<&str>) -> Result<String> {
+        let subdomain = if let Some(slug_val) = slug.filter(|s| !s.is_empty()) {
+            slug_val.to_string()
+        } else {
+            self.generate_subdomain(app_id, app_name)
+        };
+        let protocol = if self.config.use_https { "https" } else { "http" };
+        
+        Ok(format!("{}://{}.{}", protocol, subdomain, self.config.domain))
+    }
+
     /// Generate multiple gateway URLs for redundancy
     pub fn generate_all_urls(&self, app_id: &AppId, app_name: Option<&str>) -> Vec<(String, String)> {
         let mut urls = Vec::new();

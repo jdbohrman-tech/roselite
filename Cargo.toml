@@ -2,6 +2,7 @@
 members = [
     "roselite-core",
     "roselite-cli",
+    "roselite-gateway"
 ]
 resolver = "2"
 

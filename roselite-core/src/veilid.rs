@@ -125,7 +125,7 @@ impl Default for NetworkConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            data_directory: None,
+            data_directory: Some(".roselite".to_string()),  // Use hidden directory
             enable_encryption: true,
             max_storage_mb: 1024, // 1GB default
             cleanup_old_data: true,
@@ -659,120 +659,218 @@ impl VeilidConnection {
 
     /// Build comprehensive Veilid configuration
     fn build_veilid_config(&self) -> Result<String> {
+        // Ensure we have a data directory set
+        let data_dir = self.config.storage.data_directory.as_deref().unwrap_or(".roselite");
+        
+        // Build configuration in smaller pieces to avoid recursion limit
+        let protected_store = serde_json::json!({
+            "allow_insecure_fallback": self.config.development_mode,
+            "always_use_insecure_storage": self.config.development_mode,
+            "directory": data_dir,
+            "delete": false,
+            "device_encryption_key_password": "",
+            "new_device_encryption_key_password": null
+        });
+
+        let table_store = serde_json::json!({
+            "directory": data_dir,
+            "delete": false
+        });
+
+        let block_store = serde_json::json!({
+            "directory": data_dir,
+            "delete": false
+        });
+
+        let routing_table = serde_json::json!({
+            "node_id": [],
+            "node_id_secret": [],
+            "bootstrap": self.config.bootstrap_nodes,
+            "bootstrap_keys": [],
+            "limit_over_attached": 64,
+            "limit_fully_attached": 32,
+            "limit_attached_strong": 16,
+            "limit_attached_good": 8,
+            "limit_attached_weak": 5
+        });
+
+        let rpc = serde_json::json!({
+            "concurrency": 0,
+            "queue_size": 1024,
+            "max_timestamp_behind_ms": 10000,
+            "max_timestamp_ahead_ms": 10000,
+            "timeout_ms": 10000,
+            "max_route_hop_count": 4,
+            "default_route_hop_count": 1
+        });
+
+        let dht = serde_json::json!({
+            "max_find_node_count": 20,
+            "resolve_node_timeout_ms": 10000,
+            "resolve_node_count": 1,
+            "resolve_node_fanout": 4,
+            "get_value_timeout_ms": 10000,
+            "get_value_count": 3,
+            "get_value_fanout": 4,
+            "set_value_timeout_ms": 10000,
+            "set_value_count": 5,
+            "set_value_fanout": 4,
+            "min_peer_count": 20,
+            "min_peer_refresh_time_ms": 60000,
+            "validate_dial_info_receipt_time_ms": 2000,
+            "local_subkey_cache_size": 128,
+            "local_max_subkey_cache_memory_mb": 256,
+            "remote_subkey_cache_size": 1024,
+            "remote_max_records": 65536,
+            "remote_max_subkey_cache_memory_mb": 256,
+            "remote_max_storage_space_mb": self.config.storage.max_storage_mb,
+            "public_watch_limit": 32,
+            "member_watch_limit": 8,
+            "max_watch_expiration_ms": 86400000
+        });
+
+        let tls = serde_json::json!({
+            "certificate_path": "",
+            "private_key_path": "",
+            "connection_initial_timeout_ms": self.config.network.connection_timeout_ms
+        });
+
+        let application = serde_json::json!({
+            "https": {
+                "enabled": false,
+                "listen_address": "",
+                "path": "",
+                "url": null
+            },
+            "http": {
+                "enabled": false,
+                "listen_address": "",
+                "path": "",
+                "url": null
+            }
+        });
+
+        let protocol = serde_json::json!({
+            "udp": {
+                "enabled": true,
+                "socket_pool_size": 0,
+                "listen_address": self.config.network.udp_listen_address.as_deref().unwrap_or(""),
+                "public_address": null
+            },
+            "tcp": {
+                "connect": true,
+                "listen": true,
+                "max_connections": self.config.network.max_connections,
+                "listen_address": self.config.network.tcp_listen_address.as_deref().unwrap_or(""),
+                "public_address": null
+            },
+            "ws": {
+                "connect": true,
+                "listen": true,
+                "max_connections": self.config.network.max_connections / 2,
+                "listen_address": self.config.network.ws_listen_address.as_deref().unwrap_or(""),
+                "path": "ws",
+                "url": null
+            },
+            "wss": {
+                "connect": true,
+                "listen": false,
+                "max_connections": self.config.network.max_connections / 4,
+                "listen_address": "",
+                "path": "wss",
+                "url": null
+            }
+        });
+
+        let leases = serde_json::json!({
+            "max_server_signal_leases": 16,
+            "max_server_relay_leases": 16,
+            "max_client_signal_leases": 4,
+            "max_client_relay_leases": 4
+        });
+
+        let relay = serde_json::json!({
+            "client": {
+                "enabled": true
+            },
+            "server": {
+                "enabled": true
+            }
+        });
+
+        let network = serde_json::json!({
+            "connection_initial_timeout_ms": self.config.network.connection_timeout_ms,
+            "connection_inactivity_timeout_ms": 60000,
+            "max_connections_per_ip4": self.config.network.max_connections,
+            "max_connections_per_ip6_prefix": self.config.network.max_connections,
+            "max_connections_per_ip6_prefix_size": 56,
+            "max_connection_frequency_per_min": 128,
+            "client_allowlist_timeout_ms": 300000,
+            "reverse_connection_receipt_time_ms": 5000,
+            "hole_punch_receipt_time_ms": 5000,
+            "network_key_password": null,
+            "routing_table": routing_table,
+            "rpc": rpc,
+            "dht": dht,
+            "upnp": self.config.network.enable_upnp,
+            "detect_address_changes": self.config.network.enable_nat_detection,
+            "restricted_nat_retries": 3,
+            "tls": tls,
+            "application": application,
+            "protocol": protocol,
+            "leases": leases,
+            "relay": relay
+        });
+
+        let logging = serde_json::json!({
+            "system": {
+                "enabled": true,
+                "level": "info",
+                "ignore_log_targets": []
+            },
+            "terminal": {
+                "enabled": false,
+                "level": "info",
+                "ignore_log_targets": []
+            },
+            "file": {
+                "enabled": false,
+                "path": "",
+                "append": true,
+                "level": "info",
+                "ignore_log_targets": []
+            },
+            "client_api": {
+                "enabled": true,
+                "level": "info",
+                "ignore_log_targets": []
+            },
+            "otlp": {
+                "enabled": false,
+                "level": "trace",
+                "grpc_endpoint": "",
+                "service_name": "",
+                "ignore_log_targets": []
+            },
+            "console": {
+                "enabled": false
+            }
+        });
+
         let config_json = serde_json::json!({
             "program_name": self.config.program_name,
             "namespace": self.config.namespace,
             "capabilities": {
                 "disable": []
             },
-            "protected_store": {
-                "allow_insecure_fallback": self.config.development_mode,
-                "always_use_insecure_storage": self.config.development_mode,
-                "directory": self.config.storage.data_directory.as_deref().unwrap_or(""),
-                "delete": false
+            "protected_store": protected_store,
+            "table_store": table_store,
+            "block_store": block_store,
+            "network": network,
+            "testing": {
+                "subnode_index": 0
             },
-            "table_store": {
-                "directory": self.config.storage.data_directory.as_deref().unwrap_or(""),
-                "delete": false
-            },
-            "block_store": {
-                "directory": self.config.storage.data_directory.as_deref().unwrap_or(""),
-                "delete": false
-            },
-            "network": {
-                "connection_initial_timeout_ms": self.config.network.connection_timeout_ms,
-                "connection_inactivity_timeout_ms": 60000,
-                "max_connections_per_ip4": self.config.network.max_connections,
-                "max_connections_per_ip6_prefix": self.config.network.max_connections,
-                "max_connections_per_ip6_prefix_size": 56,
-                "max_connection_frequency_per_min": 128,
-                "client_allowlist_timeout_ms": 300000,
-                "reverse_connection_receipt_time_ms": 5000,
-                "hole_punch_receipt_time_ms": 5000,
-                "routing_table": {
-                    "bootstrap": self.config.bootstrap_nodes,
-                    "limit_over_attached": 64,
-                    "limit_fully_attached": 32,
-                    "limit_attached_strong": 16,
-                    "limit_attached_good": 8,
-                    "limit_attached_weak": 5
-                },
-                "rpc": {
-                    "concurrency": 0,
-                    "queue_size": 1024,
-                    "max_timestamp_behind_ms": 10000,
-                    "max_timestamp_ahead_ms": 10000,
-                    "timeout_ms": 10000,
-                    "max_route_hop_count": 4,
-                    "default_route_hop_count": 1
-                },
-                "dht": {
-                    "max_find_node_count": 20,
-                    "resolve_node_timeout_ms": 10000,
-                    "resolve_node_count": 1,
-                    "resolve_node_fanout": 4,
-                    "get_value_timeout_ms": 10000,
-                    "get_value_count": 3,
-                    "get_value_fanout": 4,
-                    "set_value_timeout_ms": 10000,
-                    "set_value_count": 5,
-                    "set_value_fanout": 4,
-                    "min_peer_count": 20,
-                    "min_peer_refresh_time_ms": 60000,
-                    "validate_dial_info_receipt_time_ms": 2000,
-                    "local_subkey_cache_size": 128,
-                    "local_max_subkey_cache_memory_mb": 256,
-                    "remote_subkey_cache_size": 1024,
-                    "remote_max_records": 65536,
-                    "remote_max_subkey_cache_memory_mb": 256,
-                    "remote_max_storage_space_mb": self.config.storage.max_storage_mb
-                },
-                "upnp": self.config.network.enable_upnp,
-                "detect_address_changes": self.config.network.enable_nat_detection,
-                "restricted_nat_retries": 3,
-                "tls": {
-                    "connection_initial_timeout_ms": self.config.network.connection_timeout_ms
-                },
-                "application": {
-                    "https": {
-                        "enabled": false,
-                        "listen_address": "",
-                        "path": ""
-                    },
-                    "http": {
-                        "enabled": false,
-                        "listen_address": "",
-                        "path": ""
-                    }
-                },
-                "protocol": {
-                    "udp": {
-                        "enabled": true,
-                        "socket_pool_size": 0,
-                        "listen_address": self.config.network.udp_listen_address.as_deref().unwrap_or("")
-                    },
-                    "tcp": {
-                        "connect": true,
-                        "listen": true,
-                        "max_connections": self.config.network.max_connections,
-                        "listen_address": self.config.network.tcp_listen_address.as_deref().unwrap_or("")
-                    },
-                    "ws": {
-                        "connect": true,
-                        "listen": true,
-                        "max_connections": self.config.network.max_connections / 2,
-                        "listen_address": self.config.network.ws_listen_address.as_deref().unwrap_or(""),
-                        "path": "ws"
-                    },
-                    "wss": {
-                        "connect": true,
-                        "listen": false,
-                        "max_connections": self.config.network.max_connections / 4,
-                        "listen_address": "",
-                        "path": "wss"
-                    }
-                }
-            }
+            "logging": logging
         });
 
         Ok(config_json.to_string())
