@@ -1,12 +1,12 @@
 site_name: Roselite
-site_url: https://jdbohrman.github.io/roselite
+site_url: https://jdbohrman-tech.github.io/roselite
 site_author: Roselite Contributors
 site_description: >-
   P2P Static Site Hosting via Veilid DHT. Deploy static content with zero censorship 
   and zero single points of failure - your content lives forever in the decentralized network.
 
-repo_name: jdbohrman/roselite
-repo_url: https://github.com/jdbohrman/roselite
+repo_name: jdbohrman-tech/roselite
+repo_url: https://github.com/jdbohrman-tech/roselite
 
 copyright: Copyright &copy; 2024 Roselite Contributors
 
