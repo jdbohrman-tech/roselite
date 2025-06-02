@@ -223,8 +223,8 @@
 }
 
 .md-header[data-md-state="shadow"] {
-  background-color: rgba(0, 0, 0, 0.8) !important;
-  box-shadow: 0 0 0.6rem rgba(0, 0, 0, 0.1);
+  background-color: transparent !important;
+  box-shadow: none;
   transition: background-color 0.3s ease;
 }
 
