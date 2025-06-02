@@ -1,6 +1,6 @@
 # Roselite - P2P Static Site Hosting via Veilid DHT
 
-Deploy static content like JAMStack sites to the [Veilid](https://veilid.com) DHT with instant web access through gateway servers. No traditional hosting, no SSL setup required - just publish and share.
+Deploy static content like JAMStack sites to the [Veilid](https://veilid.com) DHT with instant web access through gateway servers. **Zero censorship, zero single points of failure** - your content lives forever in the decentralized network.
 
 ## 🚀 Features
 
@@ -11,6 +11,8 @@ Deploy static content like JAMStack sites to the [Veilid](https://veilid.com) DH
 - **🔐 Decentralized**: Content stored in Veilid DHT, served through gateways
 - **🛡️ Fallback System**: Works even when Veilid network has connectivity issues
 - **⚡ High Performance**: In-memory and filesystem caching for fast loading
+- **🚫 Zero Censorship**: No central authority can remove your content
+- **🌍 Unstoppable**: Multiple gateway redundancy prevents takedowns
 - **🎯 Developer Friendly**: Four commands: bundle, publish, gateway, access
 
 ## 🏗️ How It Works
@@ -18,12 +20,36 @@ Deploy static content like JAMStack sites to the [Veilid](https://veilid.com) DH
 ```
 Static Site → Bundle → Veilid DHT → Gateway Server → Web Browser
 (HTML/CSS/JS) (.veilidpkg) (Distributed) (subdomain.domain.com) (HTTPS)
+                            ↑
+                    CENSORSHIP-RESISTANT
+                    No single point of control
 ```
 
 1. **Bundle** your static site files into a package
 2. **Publish** the package to Veilid's distributed hash table  
 3. **Gateway** serves content via subdomain routing (e.g., `my-site.veilid.app`)
 4. **Share** the gateway URL - fully accessible in any web browser
+5. **Survive** - Content remains accessible even if gateways are blocked
+
+## 🚫 Zero Censorship Architecture
+
+### **Distributed Content Storage**
+- **No Central Servers**: Content lives across hundreds of Veilid nodes
+- **Cryptographic Integrity**: Content cannot be modified without keys
+- **Permanent Storage**: Once published, content persists in the network
+- **Global Replication**: Automatic distribution across geographic regions
+
+### **Gateway Independence** 
+- **Multiple Gateways**: Any number of gateway servers can serve your content
+- **Gateway Redundancy**: If one gateway is blocked, others continue working
+- **Self-Hosting**: Anyone can run a gateway - no gatekeeping
+- **Domain Flexibility**: Same content accessible via different domains
+
+### **Unstoppable Access**
+- **No Single Point of Failure**: Cannot be taken down by targeting one server
+- **Resistant to Blocking**: Content accessible through multiple routes
+- **International Resilience**: Gateways can operate in any jurisdiction
+- **Emergency Access**: Direct Veilid DHT access if all gateways fail
 
 ## 📁 Project Structure
 
@@ -303,22 +329,28 @@ curl -H "Host: my-portfolio.localhost:3000" http://localhost:3000/
 - **Enhanced Caching**: TTL and cache invalidation
 - **Admin Interface**: Web UI for gateway management
 - **Analytics**: Basic usage metrics and monitoring
-- **CDN Integration**: Optional CDN support for performance
 - **Custom Domains**: DNS-based custom domain mapping
 
 ## 🎯 Advanced Use Cases
+
+### **Censorship-Resistant Publishing**
+- **Journalism**: Publish investigative content without fear of takedown
+- **Activism**: Share information in restrictive environments
+- **Whistleblowing**: Leak documents with persistent availability
+- **Free Speech**: Express ideas without platform dependency
+- **Post-Tor Content Hosting**: Build on a network that picks up where Tor left off
+
+### **Emergency & Crisis Communication**
+- **Disaster Response**: Information sharing when infrastructure fails
+- **Political Unrest**: Communication channels that can't be shut down
+- **Network Outages**: Content remains accessible during ISP issues
+- **Government Blocking**: Bypass national internet restrictions
 
 ### Personal & Business
 - **Portfolio Sites**: Developer portfolios with instant deployment
 - **Documentation**: Project docs with P2P hosting
 - **Landing Pages**: Marketing sites without hosting costs
 - **Blogs**: Static site generators → Veilid deployment
-
-### Enterprise & Web3
-- **Decentralized Apps**: Frontend hosting for dApps  
-- **Corporate Sites**: Censorship-resistant corporate presence
-- **Emergency Sites**: Disaster-resistant information distribution
-- **Web3 Integration**: Gateway integration with blockchain projects
 
 ### Community & Open Source
 - **Project Sites**: Open source project hosting
@@ -333,28 +365,51 @@ curl -H "Host: my-portfolio.localhost:3000" http://localhost:3000/
 - **🛡️ Gateway Security**: Path traversal protection
 - **🔍 Privacy**: No traditional server logs or tracking
 - **⚡ Resilient**: Automatic fallback mechanisms
+- **🚫 Uncensorable**: No central authority can remove content
+- **🌐 Global**: Accessible from anywhere via multiple routes
+- **🔑 User-Controlled**: Only you control your content keys
 
-## 💰 Monetization & Self-Hosting
+## 🌍 Censorship Resistance
 
-**Yes! The Roselite architecture supports both hosted gateways and self-hosting:**
+### **Scenario 1: Gateway Blocking**
+```
+Government blocks veilid.app domain
+→ Content still accessible via:
+  - Alternative gateways (roselite.net, veilid.org, etc.)
+  - Self-hosted gateways (your-gateway.com)
+  - Direct Veilid DHT access
+  - Tor hidden service gateways
+```
 
-### Hosted Gateway Service (Paywalled)
-- Provide `https://*.veilid.app` as a premium service
-- Subscription tiers based on bandwidth/storage
-- Enhanced features: analytics, custom domains, CDN
-- Professional support and SLA guarantees
+### **Scenario 2: ISP Censorship**
+```
+ISP blocks gateway domains
+→ Content still accessible via:
+  - VPN to different region
+  - Tor browser access
+  - Local gateway deployment
+  - Mobile network routing
+```
 
-### Self-Hosted Gateways (Free/Open Source)
-- Complete gateway server is open source
-- Users can deploy on their own domains
-- `https://*.your-domain.com` with their own infrastructure
-- No vendor lock-in - content remains in Veilid DHT
+### **Scenario 3: Legal Pressure**
+```
+Legal action against gateway operator
+→ Content still accessible via:
+  - Other gateway operators in different jurisdictions
+  - Community-run gateways
+  - Personal gateway deployment
+  - Direct P2P network access
+```
 
-### Hybrid Model Benefits
-- **Content Portability**: Sites work on any gateway
-- **No Lock-in**: Switch between gateways anytime  
-- **Market Choice**: Premium vs. self-hosted options
-- **Network Effect**: More gateways = better reliability
+### **Scenario 4: Technical Attacks**
+```
+DDoS attacks on gateway servers
+→ Content still accessible via:
+  - Load balancing across multiple gateways
+  - Automatic failover to backup gateways
+  - CDN protection (if enabled)
+  - Direct Veilid node access
+```
 
 ## 🤝 Contributing
 
@@ -383,7 +438,13 @@ cargo build --release
 
 ## 📄 License
 
-This project is licensed under MIT OR Apache-2.0.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+**Why Apache 2.0?** This license supports our zero censorship mission by:
+- Encouraging maximum adoption and community gateway deployment
+- Protecting against patent trolls who might target decentralized systems
+- Allowing commercial gateway services while keeping core technology open
+- Building trust through permissive, well-understood terms
 
 ## 🔗 Links
 
