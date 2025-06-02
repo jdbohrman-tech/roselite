@@ -30,7 +30,7 @@ use anyhow::Result;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// HTTP port to listen on
-    #[arg(short, long, default_value = "3000")]
+    #[arg(short, long, default_value = "8080")]
     port: u16,
     
     /// HTTPS port to listen on
@@ -38,7 +38,7 @@ struct Args {
     https_port: u16,
     
     /// Domain to serve (for wildcard subdomain matching)
-    #[arg(short, long, default_value = "veilid.app")]
+    #[arg(short, long, default_value = "localhost:8080")]
     domain: String,
     
     /// Path to TLS certificate file
@@ -254,7 +254,7 @@ async fn handle_root_response(state: &AppState) -> Response {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Roselite Veilid Gateway</title>
+    <title>Roselite Veilid Gateway - Local Development</title>
     <style>
         body {{ 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -287,54 +287,93 @@ async fn handle_root_response(state: &AppState) -> Response {
             border-left: 4px solid #3b82f6;
         }}
         .example {{ color: #3b82f6; font-weight: 600; }}
+        .dev-note {{ 
+            background: #fef3c7; 
+            border: 1px solid #f59e0b; 
+            border-radius: 6px; 
+            padding: 12px; 
+            margin: 15px 0;
+        }}
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>🌐 Roselite Veilid Gateway</h1>
+        <h1>🚀 Roselite Veilid Gateway</h1>
+        <p>Local Development Server</p>
         <p>Decentralized App Gateway powered by Veilid DHT</p>
+    </div>
+    
+    <div class="dev-note">
+        <strong>💻 Development Mode:</strong> This server is running locally for development and testing.
     </div>
     
     <div class="info">
         <h2>📡 Gateway Status</h2>
         <p>✅ Connected to Veilid DHT</p>
-        <p>🌐 Serving domain: <code>{}</code></p>
+        <p>🌐 Serving on: <code>{}</code></p>
         <p>🚀 Ready to serve decentralized apps</p>
     </div>
     
     <div class="info">
-        <h2>🎯 How to Access Apps</h2>
-        <p>Apps are served via subdomain routing:</p>
+        <h2>🎯 How to Access Apps Locally</h2>
+        <p>Apps are served via subdomain routing. For local development:</p>
         <div class="code">
-            <div class="example">https://your-app-slug.{}</div>
+            <div class="example">http://your-app-slug.localhost:8080</div>
         </div>
-        <p>Where <code>your-app-slug</code> is the slug of the published app.</p>
-    </div>
-    
-    <div class="info">
-        <h2>📦 Example Apps</h2>
-        <p>Try accessing these published apps:</p>
-        <div class="code">
-            <div class="example">• https://jd-bohrman-slug-test.{}</div>
+        <p>Where <code>your-app-slug</code> is the slug of your published app.</p>
+        
+        <div class="dev-note">
+            <strong>📝 Note:</strong> Modern browsers support <code>*.localhost</code> subdomains automatically. 
+            No DNS configuration needed!
         </div>
     </div>
     
     <div class="info">
-        <h2>🛠️ For Developers</h2>
-        <p>Publish your apps using the Roselite CLI:</p>
+        <h2>🛠️ Development Workflow</h2>
+        <p>1. Bundle your static site into a Veilid package:</p>
         <div class="code">
-            roselite bundle /path/to/app --name "My App"<br>
-            roselite publish my-app.veilidpkg
+            roselite bundle ./my-website --name "My Website" --developer "Your Name"
         </div>
+        
+        <p>2. Publish to the local Veilid DHT:</p>
+        <div class="code">
+            roselite publish my-website.veilidpkg
+        </div>
+        
+        <p>3. Access your app locally:</p>
+        <div class="code">
+            <div class="example">http://my-website.localhost:8080</div>
+        </div>
+    </div>
+    
+    <div class="info">
+        <h2>📁 Manual Testing</h2>
+        <p>For quick testing, you can also place app directories directly in the cache:</p>
+        <div class="code">
+            mkdir -p .cache/my-test-app<br>
+            cp -r /path/to/your/static/site/* .cache/my-test-app/<br>
+            # Visit: http://my-test-app.localhost:8080
+        </div>
+    </div>
+    
+    <div class="info">
+        <h2>🔧 Server Configuration</h2>
+        <p>Current settings:</p>
+        <ul>
+            <li><strong>Port:</strong> 8080</li>
+            <li><strong>Domain:</strong> {}</li>
+            <li><strong>Cache Directory:</strong> .cache/</li>
+            <li><strong>HTTPS:</strong> Disabled (development mode)</li>
+        </ul>
     </div>
 </body>
 </html>
-    "#, state.domain, state.domain, state.domain);
+    "#, state.domain, state.domain);
     
     Html(html).into_response()
 }
 
-/// Extract slug from hostname (e.g., "my-app.veilid.app" -> "my-app")
+/// Extract slug from hostname (e.g., "my-app.localhost:8080" -> "my-app")
 fn extract_slug_from_hostname(hostname: &str, domain: &str) -> Option<String> {
     // Remove port from hostname if present
     let hostname_no_port = hostname.split(':').next().unwrap_or(hostname);
@@ -442,12 +481,22 @@ mod tests {
 
     #[test]
     fn test_extract_slug_from_hostname() {
-        let domain = "veilid.app";
+        // Test with localhost development setup
+        let domain = "localhost:8080";
         
-        assert_eq!(extract_slug_from_hostname("my-app.veilid.app", domain), Some("my-app".to_string()));
-        assert_eq!(extract_slug_from_hostname("test-site.veilid.app", domain), Some("test-site".to_string()));
-        assert_eq!(extract_slug_from_hostname("veilid.app", domain), None);
+        assert_eq!(extract_slug_from_hostname("my-app.localhost:8080", domain), Some("my-app".to_string()));
+        assert_eq!(extract_slug_from_hostname("test-site.localhost:8080", domain), Some("test-site".to_string()));
+        assert_eq!(extract_slug_from_hostname("localhost:8080", domain), None);
         assert_eq!(extract_slug_from_hostname("invalid.com", domain), None);
-        assert_eq!(extract_slug_from_hostname("sub.my-app.veilid.app", domain), Some("sub.my-app".to_string()));
+        assert_eq!(extract_slug_from_hostname("sub.my-app.localhost:8080", domain), Some("sub.my-app".to_string()));
+        
+        // Test without port for browser compatibility
+        assert_eq!(extract_slug_from_hostname("my-app.localhost", "localhost"), Some("my-app".to_string()));
+        assert_eq!(extract_slug_from_hostname("localhost", "localhost"), None);
+        
+        // Test production domain for reference
+        let prod_domain = "localhost:8080";
+        assert_eq!(extract_slug_from_hostname("my-app.localhost:8080", prod_domain), Some("my-app".to_string()));
+        assert_eq!(extract_slug_from_hostname("localhost:8080", prod_domain), None);
     }
 } 

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About - Roselite Test Site</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 40px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        nav {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        nav a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+        nav a:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        .content {
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav>
+            <a href="index.html">Home</a>
+            <a href="about.html">About</a>
+        </nav>
+        
+        <h1>📖 About This Test</h1>
+        
+        <div class="content">
+            <p>This is a demonstration of the complete Roselite workflow:</p>
+            
+            <ol>
+                <li><strong>Bundle</strong> - Package this static site into a <code>.veilidpkg</code> format</li>
+                <li><strong>Publish</strong> - Deploy the package to the Veilid DHT network</li>
+                <li><strong>Gateway</strong> - Serve content through HTTP gateway with subdomain routing</li>
+                <li><strong>Access</strong> - Browse the site normally through any web browser</li>
+            </ol>
+            
+            <h2>🔧 Technical Details</h2>
+            <p>Roselite combines:</p>
+            <ul>
+                <li><strong>Veilid DHT</strong> - Distributed hash table for censorship-resistant storage</li>
+                <li><strong>Gateway Servers</strong> - HTTP bridges for standard web browser access</li>
+                <li><strong>Subdomain Routing</strong> - Clean URLs like <code>my-site.domain.com</code></li>
+                <li><strong>Caching Layer</strong> - Fast content delivery with fallback support</li>
+            </ul>
+            
+            <h2>🌟 Benefits</h2>
+            <p>Unlike traditional hosting, Roselite offers:</p>
+            <ul>
+                <li>No single point of failure</li>
+                <li>Resistance to censorship and takedowns</li>
+                <li>Global content distribution</li>
+                <li>Zero hosting fees after initial publication</li>
+                <li>Permanent content availability</li>
+            </ul>
+            
+            <p><em>This page demonstrates multi-page static site support in the Roselite ecosystem.</em></p>
+        </div>
+    </div>
+</body>
+</html> 

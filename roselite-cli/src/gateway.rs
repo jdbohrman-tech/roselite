@@ -13,7 +13,7 @@ pub struct GatewayConfig {
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
-            domain: "veilid.app".to_string(),
+            domain: "localhost:8080".to_string(),
             use_https: true,
             subdomain_prefix: None,
         }
@@ -33,9 +33,9 @@ impl UniversalGateway {
         
         // Add known public gateways
         known_gateways.insert(
-            "veilid.app".to_string(),
+            "localhost:8080".to_string(),
             GatewayConfig {
-                domain: "veilid.app".to_string(),
+                domain: "localhost:8080".to_string(),
                 use_https: true,
                 subdomain_prefix: None,
             }

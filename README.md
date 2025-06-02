@@ -27,7 +27,7 @@ Static Site → Bundle → Veilid DHT → Gateway Server → Web Browser
 
 1. **Bundle** your static site files into a package
 2. **Publish** the package to Veilid's distributed hash table  
-3. **Gateway** serves content via subdomain routing (e.g., `my-site.veilid.app`)
+3. **Gateway** serves content via subdomain routing (e.g., `my-site.localhost:8080`)
 4. **Share** the gateway URL - fully accessible in any web browser
 5. **Survive** - Content remains accessible even if gateways are blocked
 
@@ -90,8 +90,8 @@ curl -H "Host: my-site.localhost:3000" http://localhost:3000/
 # Or in browser: http://my-site.localhost:3000
 
 # 5. Production: Deploy gateway with proper domain
-./target/release/roselite-gateway --port 443 --domain veilid.app
-# Sites accessible at: https://my-site.veilid.app
+./target/release/roselite-gateway --port 443 --domain localhost:8080
+# Sites accessible at: https://my-site.localhost:8080
 ```
 
 ## 🌐 Gateway Server Architecture
@@ -115,7 +115,7 @@ roselite-gateway --port 8080 --domain your-domain.com
 RUST_LOG=debug roselite-gateway --port 3000 --domain localhost:3000
 
 # Production deployment
-roselite-gateway --port 443 --domain veilid.app
+roselite-gateway --port 443 --domain localhost:8080
 ```
 
 ### Gateway URL Structure
@@ -128,9 +128,9 @@ https://[slug].[domain]/[path]
 ```
 
 Examples:
-- `https://my-portfolio.veilid.app/` → serves `index.html`
-- `https://my-blog.veilid.app/about.html` → serves `about.html`
-- `https://docs.veilid.app/guide/` → serves `guide/index.html`
+- `https://my-portfolio.localhost:8080/` → serves `index.html`
+- `https://my-blog.localhost:8080/about.html` → serves `about.html`
+- `https://docs.localhost:8080/guide/` → serves `guide/index.html`
 
 ## 📦 Enhanced Package Format
 
@@ -179,7 +179,7 @@ roselite publish my-site.veilidpkg
 # 📤 Publishing package: my-site.veilidpkg
 # ✅ Published successfully!
 # 🔗 Slug: my-site
-# 🌐 Gateway URL: https://my-site.veilid.app (when gateway is running)
+# 🌐 Gateway URL: https://my-site.localhost:8080 (when gateway is running)
 ```
 
 ### Gateway Server
@@ -196,7 +196,7 @@ roselite-gateway --port 443 --domain your-domain.com
 # Custom configuration
 roselite-gateway \
   --port 8080 \
-  --domain veilid.app \
+  --domain localhost:8080 \
   --cache-dir ./site-cache
 ```
 
@@ -232,17 +232,17 @@ For wildcard subdomain support:
 
 ```dns
 # Wildcard A record pointing to your server
-*.veilid.app. IN A 1.2.3.4
+*.localhost:8080. IN A 1.2.3.4
 
 # Root domain (optional)  
-veilid.app. IN A 1.2.3.4
+localhost:8080. IN A 1.2.3.4
 ```
 
 ### 3. SSL/TLS Setup
 
 ```bash
 # With Let's Encrypt
-certbot certonly --standalone -d "*.veilid.app" -d "veilid.app"
+certbot certonly --standalone -d "*.localhost:8080" -d "localhost:8080"
 
 # Start gateway with TLS (requires TLS proxy like nginx)
 # Or use a reverse proxy like Cloudflare
@@ -254,7 +254,7 @@ certbot certonly --standalone -d "*.veilid.app" -d "veilid.app"
 # Production command
 ./target/release/roselite-gateway \
   --port 8080 \
-  --domain veilid.app
+  --domain localhost:8080
   
 # Behind reverse proxy (recommended)
 # nginx/caddy handles TLS, forwards to gateway
@@ -373,7 +373,7 @@ curl -H "Host: my-portfolio.localhost:3000" http://localhost:3000/
 
 ### **Scenario 1: Gateway Blocking**
 ```
-Government blocks veilid.app domain
+Government blocks localhost:8080 domain
 → Content still accessible via:
   - Alternative gateways (roselite.net, veilid.org, etc.)
   - Self-hosted gateways (your-gateway.com)

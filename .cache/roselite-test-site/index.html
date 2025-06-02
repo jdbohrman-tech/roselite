@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Roselite Test Site</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 40px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            text-align: center;
+            font-size: 3em;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+        .feature {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .feature h3 {
+            margin-top: 0;
+            color: #fff;
+        }
+        .timestamp {
+            text-align: center;
+            margin-top: 30px;
+            font-style: italic;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌹 Roselite Test Site</h1>
+        <p>Welcome to the Roselite decentralized hosting test! This site is being served through the Veilid DHT network.</p>
+        
+        <div class="features">
+            <div class="feature">
+                <h3>🚀 Decentralized</h3>
+                <p>Your content lives forever in the distributed network, no single point of failure.</p>
+            </div>
+            <div class="feature">
+                <h3>🔐 Censorship Resistant</h3>
+                <p>No central authority can remove your content from the network.</p>
+            </div>
+            <div class="feature">
+                <h3>⚡ Fast & Reliable</h3>
+                <p>Gateway caching ensures fast loading times even with network issues.</p>
+            </div>
+            <div class="feature">
+                <h3>🌍 Global Access</h3>
+                <p>Accessible from anywhere in the world through multiple gateway servers.</p>
+            </div>
+        </div>
+        
+        <div class="timestamp">
+            Site deployed on: <span id="timestamp"></span>
+        </div>
+    </div>
+    
+    <script>
+        document.getElementById('timestamp').textContent = new Date().toLocaleString();
+    </script>
+</body>
+</html> 
