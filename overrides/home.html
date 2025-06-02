@@ -1,0 +1,28 @@
+{% extends "main.html" %}
+
+{% block hero %}
+  {% if page.meta.template == "home.html" %}
+    <section class="mdx-hero">
+      <div class="mdx-hero__image">
+        <div class="mdx-hero__content">
+          <div class="mdx-hero__inner">
+            <h1 class="mdx-hero__title">{{ page.meta.hero.title | default("P2P hosting that simply works") }}</h1>
+            <p class="mdx-hero__subtitle">{{ page.meta.hero.subtitle | default("Deploy static content to the Veilid DHT with instant web access through gateway servers. Zero censorship, zero single points of failure – your content lives forever in the decentralized network.") }}</p>
+            <div class="mdx-hero__buttons">
+              <a href="{{ page.meta.hero.primary_link | default('getting-started/') }}" class="md-button md-button--primary">
+                {{ page.meta.hero.primary_text | default("Get started") }}
+              </a>
+              <a href="{{ page.meta.hero.secondary_link | default('architecture/') }}" class="md-button">
+                {{ page.meta.hero.secondary_text | default("Learn more") }}
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+  {{ super() }}
+{% endblock %} 
