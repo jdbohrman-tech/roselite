@@ -1,21 +1,45 @@
-/* Hero section styling inspired by Material for MkDocs official site */
+/* Hero section styling - now transparent */
 .mdx-hero {
   overflow: hidden;
-  color: var(--md-primary-bg-color);
-  background: url('../assets/hero.png') center/cover no-repeat;
+  color: var(--md-primary-fg-color);
+  background: transparent;
   position: relative;
 }
 
 .mdx-hero__image {
   min-height: 26rem;
   position: relative;
-  background: rgba(0, 0, 0, 0.4); /* Dark overlay for better text readability */
+  background: transparent;
 }
 
-/* Remove the old gradient and crystal effects since we're using a background image */
+/* Remove the background overlay */
 .mdx-hero__image::before,
 .mdx-hero__image::after {
   display: none;
+}
+
+/* Make the header/navigation transparent */
+.md-header {
+  background-color: transparent !important;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: none !important;
+}
+
+.md-header--lifted {
+  background-color: transparent !important;
+}
+
+/* Make tabs transparent */
+.md-tabs {
+  background-color: transparent !important;
+}
+
+/* Ensure logo and navigation text remain visible */
+.md-header__title,
+.md-header__button,
+.md-nav__link {
+  color: var(--md-primary-fg-color) !important;
 }
 
 @keyframes crystalline {
@@ -55,20 +79,20 @@
   font-weight: 700;
   font-size: 2.4rem;
   line-height: 1.2;
-  color: white;
+  color: var(--md-primary-fg-color);
   margin-bottom: 1rem;
-  text-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  text-shadow: none;
 }
 
 .mdx-hero__subtitle {
   font-size: 1.25rem;
   line-height: 1.5;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--md-default-fg-color--light);
   margin-bottom: 2.5rem;
   max-width: 48rem;
   margin-left: auto;
   margin-right: auto;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  text-shadow: none;
 }
 
 .mdx-hero__buttons {
@@ -79,22 +103,24 @@
 }
 
 .mdx-hero .md-button {
-  color: white;
-  border-color: rgba(255, 255, 255, 0.7);
+  color: var(--md-primary-fg-color);
+  border-color: var(--md-primary-fg-color);
   margin: 0.25rem;
   padding: 0.625rem 2rem;
   transition: all 0.3s ease;
+  background-color: transparent;
 }
 
 .mdx-hero .md-button--primary {
   background-color: var(--md-primary-fg-color);
   border-color: var(--md-primary-fg-color);
-  color: white;
+  color: var(--md-primary-bg-color);
 }
 
 .mdx-hero .md-button:hover {
-  background-color: rgba(255, 255, 255, 0.1);
-  border-color: white;
+  background-color: var(--md-primary-fg-color);
+  border-color: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
@@ -211,61 +237,4 @@
 /* Footer improvements */
 .md-footer {
   margin-top: 3rem;
-}
-
-/* Header transparency and logo styling */
-.md-header {
-  background-color: rgba(0, 0, 0, 0.1) !important;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  transition: all 0.3s ease;
-}
-
-.md-header--shadow {
-  background-color: rgba(0, 0, 0, 0.2) !important;
-  box-shadow: 0 0 0.2rem rgba(0, 0, 0, 0.1), 0 0.2rem 0.4rem rgba(0, 0, 0, 0.2);
-}
-
-/* Logo sizing and positioning */
-.md-header__button.md-logo {
-  padding: 0.2rem;
-  margin: 0.2rem 0.5rem 0.2rem 0;
-}
-
-.md-header__button.md-logo img,
-.md-header__button.md-logo svg {
-  height: 2.5rem !important;
-  width: 2.5rem !important;
-  display: block;
-}
-
-/* Reduce spacing between logo and title */
-.md-header__title {
-  margin-left: 0.25rem;
-  font-weight: 600;
-  color: white;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-}
-
-/* Ensure header content is visible over hero background */
-.md-header__inner {
-  background: transparent;
-}
-
-/* Navigation text styling for better visibility */
-.md-header__title,
-.md-nav__link {
-  color: white !important;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-}
-
-.md-header__button {
-  color: white !important;
-}
-
-/* Search box styling for transparent header */
-.md-search__input {
-  background-color: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.2);
 } 
