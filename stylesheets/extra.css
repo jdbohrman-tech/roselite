@@ -211,4 +211,61 @@
 /* Footer improvements */
 .md-footer {
   margin-top: 3rem;
+}
+
+/* Header transparency and logo styling */
+.md-header {
+  background-color: rgba(0, 0, 0, 0.1) !important;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+.md-header--shadow {
+  background-color: rgba(0, 0, 0, 0.2) !important;
+  box-shadow: 0 0 0.2rem rgba(0, 0, 0, 0.1), 0 0.2rem 0.4rem rgba(0, 0, 0, 0.2);
+}
+
+/* Logo sizing and positioning */
+.md-header__button.md-logo {
+  padding: 0.2rem;
+  margin: 0.2rem 0.5rem 0.2rem 0;
+}
+
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 2.5rem !important;
+  width: 2.5rem !important;
+  display: block;
+}
+
+/* Reduce spacing between logo and title */
+.md-header__title {
+  margin-left: 0.25rem;
+  font-weight: 600;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* Ensure header content is visible over hero background */
+.md-header__inner {
+  background: transparent;
+}
+
+/* Navigation text styling for better visibility */
+.md-header__title,
+.md-nav__link {
+  color: white !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.md-header__button {
+  color: white !important;
+}
+
+/* Search box styling for transparent header */
+.md-search__input {
+  background-color: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
 } 
