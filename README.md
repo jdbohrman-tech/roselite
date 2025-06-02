@@ -448,9 +448,10 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ## 🔗 Links
 
+- [📚 Complete Documentation](https://yourusername.github.io/roselite) - Full documentation site with getting started guide
 - [Veilid Project](https://veilid.com)
 - [Veilid Developer Book](https://veilid.gitlab.io/developer-book/)
-- [Gateway Documentation](./docs/gateway.md)
-- [API Reference](./docs/api.md)
+- [CLI Reference](https://yourusername.github.io/roselite/reference/cli-commands/) - Complete command reference
 - [Issue Tracker](https://github.com/yourusername/roselite/issues)
-- [Discussions](https://github.com/yourusername/roselite/discussions) 
+- [Discussions](https://github.com/yourusername/roselite/discussions)
+- [💖 Sponsor the Project](https://yourusername.github.io/roselite/sponsor/) - Help fund development 
