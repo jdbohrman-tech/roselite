@@ -1,3 +1,12 @@
+/* Custom color palette using logo colors */
+:root {
+  --md-primary-fg-color:        #e53734;  /* Red primary from logo */
+  --md-primary-fg-color--light: #e57171;  /* Lighter red */
+  --md-primary-fg-color--dark:  #c52d2a;  /* Darker red */
+  --md-accent-fg-color:         #DF3281;  /* Bright pink from logo */
+  --md-accent-fg-color--transparent: #DF328133; /* Pink with transparency */
+}
+
 /* Hero section styling inspired by Material for MkDocs official site */
 .mdx-hero {
   overflow: hidden;
