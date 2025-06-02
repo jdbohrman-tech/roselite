@@ -79,10 +79,10 @@ plugins:
       minify_html: true
 
 extra:
-  homepage: https://jdbohrman.github.io/roselite
+  homepage: https://jdbohrman-tech.github.io/roselite
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/jdbohrman/roselite
+      link: https://github.com/jdbohrman-tech/roselite
       name: Roselite on GitHub
 
 extra_css:
