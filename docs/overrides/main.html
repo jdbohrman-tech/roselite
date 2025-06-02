@@ -12,13 +12,13 @@
 {% endblock %}
 
 {% block content %}
-  {% if page.title == "Roselite - P2P Static Site Hosting" %}
+  {% if page.meta.template == "home.html" %}
     <style>
       .md-content__inner {
         margin: 0;
         padding: 0;
       }
-      .md-content__inner > .hero {
+      .md-content__inner > .mdx-hero {
         margin-top: -2rem;
       }
     </style>

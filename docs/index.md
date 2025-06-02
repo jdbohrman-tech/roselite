@@ -1,17 +1,14 @@
 ---
 title: Roselite - P2P Static Site Hosting
+template: home.html
+hero:
+  title: P2P hosting that simply works
+  subtitle: Deploy static content to the Veilid DHT with instant web access through gateway servers. Zero censorship, zero single points of failure – your content lives forever in the decentralized network.
+  primary_text: Get started
+  primary_link: getting-started/
+  secondary_text: Learn more
+  secondary_link: architecture/
 ---
-
-<div class="hero">
-  <div class="hero-content">
-    <h1>P2P hosting that simply works</h1>
-    <p>Deploy static content to the Veilid DHT with instant web access through gateway servers. <strong>Zero censorship, zero single points of failure</strong> – your content lives forever in the decentralized network.</p>
-    <div class="hero-buttons">
-      <a href="getting-started/" class="hero-button primary">Get started</a>
-      <a href="architecture/" class="hero-button">Learn more</a>
-    </div>
-  </div>
-</div>
 
 ## Everything you would expect
 
