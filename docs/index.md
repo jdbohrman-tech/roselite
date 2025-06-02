@@ -1,5 +1,4 @@
 ---
-template: home.html
 title: Roselite - P2P Static Site Hosting
 ---
 
