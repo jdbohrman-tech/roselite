@@ -192,7 +192,7 @@ cargo test --all
 
 ## 📝 License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+Apache 2.0 License - see [LICENSE](LICENSE) file for details.
 
 ## 🤝 Contributing
 
