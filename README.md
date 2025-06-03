@@ -204,7 +204,7 @@ Roselite is developed by [@jdbohrman](https://github.com/jdbohrman) with the goa
 
 <div align="center">
 
-![Buy me a coffee](bmc_qr.png)
+<a href="https://www.buymeacoffee.com/jdbohrman.tech" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
 **[☕ Support on coff.ee/jdbohrman.tech](https://coff.ee/jdbohrman.tech)**
 
