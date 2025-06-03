@@ -106,6 +106,6 @@ flake.lock
 .cursor
 _next
 target
-publishables
+/publishables
 
 # Before adding new lines, see the comment at the top.
