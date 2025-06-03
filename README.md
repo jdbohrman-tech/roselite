@@ -1,3 +1,5 @@
+![](banner.png)
+
 # Roselite - P2P Static Site Hosting via Veilid DHT
 
 Deploy static content like JAMStack sites to the [Veilid](https://veilid.com) DHT with instant web access through gateway servers. **Zero censorship, zero single points of failure** - your content lives forever in the decentralized network.
