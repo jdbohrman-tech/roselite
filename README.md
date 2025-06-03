@@ -109,6 +109,44 @@ your-site.example.com A 123.456.789.10
 - Distributed across multiple nodes for redundancy
 - No central server can delete or modify content
 
+### Multi-Record Content Handling
+For large websites exceeding DHT record size limits, Roselite automatically splits content across multiple records:
+
+#### Chunking Strategy
+- **Automatic Splitting**: Large packages split into sequential chunks (0, 1, 2, ...)
+- **Optimal Size**: Each chunk targets ~30KB to stay under DHT limits
+- **Compression**: Content is gzip-compressed before chunking for efficiency
+
+#### Lookup Record Structure
+The main DHT key contains a **lookup record** with complete package metadata:
+```json
+{
+  "manifest": { /* Package manifest */ },
+  "chunk_count": 5,
+  "total_size": 150000,
+  "chunk_keys": [
+    "VLD0:ABC123...000",  // Chunk 0
+    "VLD0:ABC123...001",  // Chunk 1
+    "VLD0:ABC123...002",  // Chunk 2
+    "VLD0:ABC123...003",  // Chunk 3
+    "VLD0:ABC123...004"   // Chunk 4
+  ]
+}
+```
+
+#### Gateway Assembly Process
+1. **Resolve DNS**: `your-site.domain.com` → `VLD0:MainKey`
+2. **Fetch Lookup**: Download lookup record from main DHT key
+3. **Parallel Download**: Fetch all chunks simultaneously for speed
+4. **Reassemble**: Concatenate chunks in correct order
+5. **Decompress**: Extract tar.gz to serve individual files
+6. **Cache**: Store assembled content locally for subsequent requests
+
+#### Benefits
+- **Parallel Loading**: Multiple chunks download simultaneously
+- **Efficient Updates**: Only changed chunks need republishing
+- **DHT Compliance**: Each record stays within Veilid's size constraints
+
 ### Gateway Servers
 - **Local Development**: Run `roselite-gateway` on localhost
 - **Self-Hosted**: Deploy on your VPS/cloud instance  
@@ -140,7 +178,7 @@ We're launching a network of public gateway servers for universal access:
 ### Usage
 ```bash
 # Publish once
-roselite-cli publish my-site.veilidpkg
+roselite-cli publish my-site.veilidpkg --gateway-url http://localhost:8080
 # → Returns: VLD0:ABCDEFxxxxxx
 
 # Access from anywhere
