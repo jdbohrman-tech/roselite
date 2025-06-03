@@ -1,6 +1,6 @@
 use color_eyre::Result;
 use roselite_core::types::AppId;
-use std::collections::HashMap;
+// use std::collections::HashMap;
 
 /// Universal Gateway configuration
 #[derive(Debug, Clone)]
@@ -14,7 +14,7 @@ impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             domain: "localhost:8080".to_string(),
-            use_https: true,
+            use_https: false,
             subdomain_prefix: None,
         }
     }
@@ -23,47 +23,36 @@ impl Default for GatewayConfig {
 /// Universal Gateway manager for converting DHT keys to web URLs
 pub struct UniversalGateway {
     config: GatewayConfig,
-    known_gateways: HashMap<String, GatewayConfig>,
+    // Previously we supported multiple "known" gateways for convenience.
+    // The new design relies on a single, user-supplied gateway URL so this map is no longer needed.
+    // Removing it simplifies the API and eliminates implicit behaviour.
 }
 
 impl UniversalGateway {
     /// Create a new Universal Gateway manager
     pub fn new() -> Self {
-        let mut known_gateways = HashMap::new();
-        
-        // Add known public gateways
-        known_gateways.insert(
-            "localhost:8080".to_string(),
-            GatewayConfig {
-                domain: "localhost:8080".to_string(),
-                use_https: true,
-                subdomain_prefix: None,
-            }
-        );
-        
-        known_gateways.insert(
-            "roselite.app".to_string(),
-            GatewayConfig {
-                domain: "roselite.app".to_string(),
-                use_https: true,
-                subdomain_prefix: None,
-            }
-        );
-        
-        // Add localhost for development
-        known_gateways.insert(
-            "localhost".to_string(),
-            GatewayConfig {
-                domain: "localhost:3000".to_string(),
-                use_https: false,
-                subdomain_prefix: Some("dht".to_string()),
-            }
-        );
-
         Self {
             config: GatewayConfig::default(),
-            known_gateways,
         }
+    }
+
+    /// Create gateway with user provided base domain (host[:port]). Use HTTPS if standard 443/8443 or if scheme "https://" is given.
+    pub fn from_domain(domain_str: &str) -> Self {
+        // Try to parse scheme
+        let (clean_domain, use_https) = if let Some(stripped) = domain_str.strip_prefix("https://") {
+            (stripped.to_string(), true)
+        } else if let Some(stripped) = domain_str.strip_prefix("http://") {
+            (stripped.to_string(), false)
+        } else {
+            // Heuristic: if port 8443 or no port implies https? else http.
+            let https_guess = domain_str.ends_with(":443") || domain_str.ends_with(":8443");
+            (domain_str.to_string(), https_guess)
+        };
+
+        let mut gw = Self::new();
+        gw.config.domain = clean_domain;
+        gw.config.use_https = use_https;
+        gw
     }
 
     /// Generate a gateway URL for an app
@@ -74,30 +63,11 @@ impl UniversalGateway {
         Ok(format!("{}://{}.{}", protocol, subdomain, self.config.domain))
     }
 
-    /// Generate a gateway URL using slug if available
-    pub fn generate_url_with_slug(&self, app_id: &AppId, slug: Option<&str>, app_name: Option<&str>) -> Result<String> {
-        let subdomain = if let Some(slug_val) = slug.filter(|s| !s.is_empty()) {
-            slug_val.to_string()
-        } else {
-            self.generate_subdomain(app_id, app_name)
-        };
-        let protocol = if self.config.use_https { "https" } else { "http" };
-        
-        Ok(format!("{}://{}.{}", protocol, subdomain, self.config.domain))
-    }
-
     /// Generate multiple gateway URLs for redundancy
     pub fn generate_all_urls(&self, app_id: &AppId, app_name: Option<&str>) -> Vec<(String, String)> {
-        let mut urls = Vec::new();
-        
-        for (name, config) in &self.known_gateways {
-            let subdomain = self.generate_subdomain_for_config(app_id, app_name, config);
-            let protocol = if config.use_https { "https" } else { "http" };
-            let url = format!("{}://{}.{}", protocol, subdomain, config.domain);
-            urls.push((name.clone(), url));
-        }
-        
-        urls
+        // With a single gateway configuration this returns only one entry — the primary URL.
+        let url = self.generate_url(app_id, app_name).unwrap_or_default();
+        vec![(self.config.domain.clone(), url)]
     }
 
     /// Generate gateway setup instructions
@@ -170,10 +140,14 @@ r#"🌐 Universal Gateway Access:
     /// Format alternative gateways list
     fn format_alternative_gateways(&self, app_id: &AppId, app_name: Option<&str>) -> String {
         let urls = self.generate_all_urls(app_id, app_name);
-        urls.iter()
-            .map(|(name, url)| format!("   🔗 {}: {}", name, url))
-            .collect::<Vec<_>>()
-            .join("\n")
+        if urls.len() <= 1 {
+            "   (none)".to_string()
+        } else {
+            urls.iter()
+                .map(|(name, url)| format!("   🔗 {}: {}", name, url))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
     }
 
     /// Generate sharing text with multiple access methods

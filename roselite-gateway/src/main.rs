@@ -21,9 +21,12 @@ use std::{
     sync::Arc,
     path::PathBuf,
     collections::HashMap,
+    process::{Command, Stdio},
 };
 use clap::Parser;
 use anyhow::Result;
+// Add DNS resolver
+use hickory_resolver::{TokioAsyncResolver, config::{ResolverConfig, ResolverOpts}};
 
 /// Veilid Gateway Server
 #[derive(Parser, Debug)]
@@ -56,6 +59,18 @@ struct Args {
     /// Cache directory for extracted apps
     #[arg(long, default_value = ".cache")]
     cache_dir: String,
+
+    /// Automatically start rust-rpxy in front of the HTTP service (provides automatic HTTPS)
+    #[arg(long)]
+    proxy: bool,
+
+    /// Path to the rust-rpxy binary (defaults to `rpxy` in $PATH)
+    #[arg(long, default_value = "rpxy")]
+    proxy_bin: String,
+
+    /// Email address used for ACME (Let's Encrypt) when --proxy is supplied
+    #[arg(long, default_value = "admin@example.com")]
+    acme_email: String,
 }
 
 /// Shared application state
@@ -75,6 +90,23 @@ struct CachedApp {
 }
 
 type AppCache = Arc<tokio::sync::RwLock<HashMap<String, CachedApp>>>;
+
+/// Resolve Veilid DHT key for a domain via DNS TXT record `veilid-app=<KEY>`
+async fn lookup_dht_key(domain: &str) -> Option<String> {
+    let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
+    if let Ok(response) = resolver.txt_lookup(domain).await {
+        for txt in response.iter() {
+            for data in txt.txt_data() {
+                if let Ok(text) = std::str::from_utf8(data) {
+                    if let Some(rest) = text.strip_prefix("veilid-app=") {
+                        return Some(rest.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -107,19 +139,29 @@ async fn main() -> Result<()> {
         domain: args.domain.clone(),
     };
     
-    // Create app cache
-    let app_cache: AppCache = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+    // Create app cache and domain mapping
+    let cache: AppCache = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+    
+    // If proxy flag is set, spin up rust-rpxy in front of us BEFORE binding the HTTP listener.
+    // This will forward :80 and :443 to our internal port.
+    if args.proxy {
+        start_rpxy(&args)?;
+
+        info!("🛡️  rust-rpxy proxy launched. It will terminate TLS and forward traffic to the internal gateway.");
+        info!("➡️  Make sure your domain's A/AAAA records point at this server's public IP.");
+        info!("✅ Certificates will be obtained automatically via ACME for {}", args.domain);
+    }
     
     // Build our application with routes
     let app = Router::new()
-        .route("/*path", get(handle_path_request))
         .route("/", get(handle_root_request))
+        .route("/*path", get(handle_path_request))
         .layer(
             ServiceBuilder::new()
                 .layer(CorsLayer::permissive())
                 .layer(CompressionLayer::new())
         )
-        .with_state((state, app_cache));
+        .with_state((state, cache));
 
     // Start HTTP server
     let http_addr = format!("0.0.0.0:{}", args.port);
@@ -158,7 +200,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Handle root path requests
+/// Handle root domain requests (show welcome page)
 async fn handle_root_request(
     Host(hostname): Host,
     State((state, cache)): State<(AppState, AppCache)>,
@@ -166,7 +208,7 @@ async fn handle_root_request(
     handle_request_internal(hostname, String::new(), state, cache).await
 }
 
-/// Handle path requests
+/// Handle requests with paths
 async fn handle_path_request(
     Host(hostname): Host,
     Path(path): Path<String>,
@@ -184,68 +226,188 @@ async fn handle_request_internal(
 ) -> impl IntoResponse {
     debug!("📡 Request: {} -> /{}", hostname, path);
     
-    // Extract slug from subdomain
-    let slug = match extract_slug_from_hostname(&hostname, &state.domain) {
-        Some(slug) => slug,
+    // Extract domain from subdomain
+    let domain = match extract_domain_from_hostname(&hostname, &state.domain) {
+        Some(domain) => domain,
         None => {
-            // If no slug, this is a root domain request, show the welcome page
+            // If no domain, this is a root domain request, show the welcome page
             info!("🏠 Root domain request: {}", hostname);
             return handle_root_response(&state).await;
         }
     };
     
-    info!("🎯 Serving app: {} (path: /{})", slug, path);
+    info!("🎯 Serving domain: {} (path: /{})", domain, path);
+    
+    // Resolve domain to DHT key via DNS TXT
+    let dht_key = match lookup_dht_key(&domain).await {
+        Some(key) => {
+            info!("✅ Resolved domain '{}' to DHT key '{}' via DNS TXT", domain, key);
+            key
+        },
+        None => {
+            warn!("❌ No veilid-app TXT record found for domain: {}", domain);
+            return handle_domain_not_found(&domain).await;
+        }
+    };
     
     // Try to get app from cache first
     {
         let cache_read = cache.read().await;
-        if let Some(cached_app) = cache_read.get(&slug) {
-            debug!("💾 Found app in cache: {}", slug);
+        if let Some(cached_app) = cache_read.get(&domain) {
+            debug!("💾 Found app in cache: {}", domain);
             return serve_static_file(&cached_app.extract_path, &path).await;
         }
     }
     
     // Check if app directory exists in cache (for manual testing or fallback)
-    let extract_path = state.cache_dir.join(&slug);
+    let extract_path = state.cache_dir.join(&domain);
     if extract_path.exists() && extract_path.is_dir() {
-        info!("📁 Found app directory in cache: {}", slug);
+        info!("📁 Found app directory in cache: {}", domain);
         return serve_static_file(&extract_path, &path).await;
     }
     
-    // Not in cache, fetch from DHT
-    info!("📡 Fetching app from Veilid DHT: {}", slug);
+    // Not in cache, fetch from DHT using the resolved DHT key
+    info!("📡 Fetching app from Veilid DHT using key: {}", dht_key);
     
-    let package = {
-        let store = state.store.lock().await;
-        match store.download(&VeilUri::new(AppId(slug.clone()), None)).await {
-            Ok(package) => package,
-            Err(e) => {
-                error!("❌ Failed to fetch app {}: {}", slug, e);
-                return (StatusCode::NOT_FOUND, format!("App not found: {}", slug)).into_response();
+    let store = state.store.lock().await;
+    
+    // Create VeilUri from the DHT key
+    let app_id = AppId(dht_key.clone());
+    let uri = VeilUri::new(app_id, None);
+    
+    match store.download(&uri).await {
+        Ok(package) => {
+            info!("✅ Successfully downloaded package for domain: {}", domain);
+            
+            // Extract package to cache directory
+            let extract_path = state.cache_dir.join(&domain);
+            if let Err(e) = extract_package_to_cache(&package, &extract_path).await {
+                error!("❌ Failed to extract package {}: {}", domain, e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to extract app").into_response();
             }
+            
+            // Cache the app
+            let cached_app = CachedApp {
+                package: package.clone(),
+                extract_path: extract_path.clone(),
+                last_accessed: std::time::Instant::now(),
+            };
+            
+            {
+                let mut cache_write = cache.write().await;
+                cache_write.insert(domain.clone(), cached_app);
+            }
+            
+            info!("💾 Cached app: {}", domain);
+            
+            // Serve the requested file
+            serve_static_file(&extract_path, &path).await
         }
-    };
-    
-    // Extract package to cache directory
-    if let Err(e) = extract_package_to_cache(&package, &extract_path).await {
-        error!("❌ Failed to extract package {}: {}", slug, e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to extract app").into_response();
+        Err(e) => {
+            error!("❌ Failed to fetch app {}: {}", domain, e);
+            handle_domain_not_found(&domain).await
+        }
     }
+}
+
+/// Handle unknown domain
+async fn handle_domain_not_found(domain: &str) -> Response {
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>Site Not Found</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .container {{
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+            max-width: 500px;
+        }}
+        h1 {{ color: #e74c3c; margin-bottom: 20px; }}
+        p {{ margin: 10px 0; line-height: 1.6; }}
+        .code {{ 
+            background: #f8f9fa; 
+            padding: 10px; 
+            border-radius: 5px; 
+            font-family: monospace; 
+            margin: 15px 0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Site Not Found</h1>
+        <p>The site <strong>{}</strong> is not published or does not have a valid DNS TXT record.</p>
+        <p>If you're the owner, publish your site using:</p>
+        <div class="code">roselite publish your-site.veilidpkg</div>
+        <p>Then add a DNS TXT record pointing to your DHT key.</p>
+    </div>
+</body>
+</html>"#,
+        domain
+    );
     
-    // Add to cache
-    {
-        let mut cache_write = cache.write().await;
-        cache_write.insert(slug.clone(), CachedApp {
-            package: package.clone(),
-            extract_path: extract_path.clone(),
-            last_accessed: std::time::Instant::now(),
-        });
-    }
+    (StatusCode::NOT_FOUND, Html(html)).into_response()
+}
+
+/// Handle app download failure
+async fn handle_app_not_found(domain: &str) -> Response {
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>App Download Failed</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .container {{
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+            max-width: 500px;
+        }}
+        h1 {{ color: #e67e22; margin-bottom: 20px; }}
+        p {{ margin: 10px 0; line-height: 1.6; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚠️ Download Failed</h1>
+        <p>Failed to download the app <strong>{}</strong> from the Veilid DHT.</p>
+        <p>This could be a temporary network issue or the content may no longer be available.</p>
+        <p>Please try again later or contact the site owner.</p>
+    </div>
+</body>
+</html>"#,
+        domain
+    );
     
-    info!("✅ Cached app: {}", slug);
-    
-    // Serve the requested file
-    serve_static_file(&extract_path, &path).await
+    (StatusCode::SERVICE_UNAVAILABLE, Html(html)).into_response()
 }
 
 /// Generate root response HTML
@@ -315,17 +477,20 @@ async fn handle_root_response(state: &AppState) -> Response {
     </div>
     
     <div class="info">
-        <h2>🎯 How to Access Apps Locally</h2>
-        <p>Apps are served via subdomain routing. For local development:</p>
-        <div class="code">
-            <div class="example">http://your-app-slug.localhost:8080</div>
-        </div>
-        <p>Where <code>your-app-slug</code> is the slug of your published app.</p>
+        <h2>🚀 Quick Start</h2>
+        <p>To serve your Veilid app, you have a few options:</p>
         
-        <div class="dev-note">
-            <strong>📝 Note:</strong> Modern browsers support <code>*.localhost</code> subdomains automatically. 
-            No DNS configuration needed!
-        </div>
+        <h3>📦 Option 1: Publish and Access via Domain</h3>
+        <ol>
+            <li>Publish your app: <code>roselite publish your-app.veilidpkg</code></li>
+            <li>Set up DNS TXT record: <code>your-domain.com. IN TXT "veilid-app=YOUR_DHT_KEY"</code></li>
+            <li>Access via: <div class="example">http://your-domain.{}</div></li>
+        </ol>
+        
+        <h3>🔧 Option 2: Direct DHT Access</h3>
+        <p>Use any subdomain format:</p>
+        <div class="example">http://your-app-domain.{}</div>
+        <p>Where <code>your-app-domain</code> has a DNS TXT record pointing to your DHT key.</p>
     </div>
     
     <div class="info">
@@ -368,64 +533,41 @@ async fn handle_root_response(state: &AppState) -> Response {
     </div>
 </body>
 </html>
-    "#, state.domain, state.domain);
+    "#, state.domain, state.domain, state.domain, state.domain);
     
     Html(html).into_response()
 }
 
-/// Extract slug from hostname (e.g., "my-app.localhost:8080" -> "my-app")
-fn extract_slug_from_hostname(hostname: &str, domain: &str) -> Option<String> {
-    // Remove port from hostname if present
+/// Extract domain from hostname (e.g., "my-app.localhost:8080" -> "my-app")
+fn extract_domain_from_hostname(hostname: &str, domain: &str) -> Option<String> {
     let hostname_no_port = hostname.split(':').next().unwrap_or(hostname);
     let domain_no_port = domain.split(':').next().unwrap_or(domain);
     
-    debug!("🔍 Extracting slug from hostname: '{}' (no port: '{}'), domain: '{}' (no port: '{}')", 
-           hostname, hostname_no_port, domain, domain_no_port);
-    
     if hostname_no_port == domain_no_port {
-        debug!("🏠 Root domain detected");
-        return None; // Root domain
-    }
-    
-    if let Some(subdomain) = hostname_no_port.strip_suffix(&format!(".{}", domain_no_port)) {
-        if subdomain.is_empty() {
-            debug!("❌ Empty subdomain");
-            None
-        } else {
-            debug!("✅ Extracted slug: '{}'", subdomain);
-            Some(subdomain.to_string())
-        }
+        None // Root domain
     } else {
-        debug!("❌ Hostname doesn't match domain pattern");
-        None
+        Some(hostname_no_port.to_string())
     }
 }
 
 /// Extract package contents to cache directory
-async fn extract_package_to_cache(package: &Package, extract_path: &PathBuf) -> Result<()> {
-    // Create extraction directory
+async fn extract_package_to_cache(package: &Package, extract_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    // Remove existing directory if it exists
     if extract_path.exists() {
         std::fs::remove_dir_all(extract_path)?;
     }
+    
+    // Create the directory
     std::fs::create_dir_all(extract_path)?;
     
-    // Extract files from package using the extract_files method
-    let files = package.extract_files().await?;
+    // Extract the archive contents - use package.content which contains the gzipped tar
+    use flate2::read::GzDecoder;
+    use std::io::Cursor;
     
-    // Write each file to the extraction directory
-    for (file_path, file_data) in &files {
-        let full_path = extract_path.join(file_path);
-        
-        // Create parent directories if needed
-        if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        
-        // Write file
-        std::fs::write(full_path, file_data)?;
-    }
+    let decoder = GzDecoder::new(Cursor::new(&package.content));
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(extract_path)?;
     
-    debug!("📁 Extracted {} files to {:?}", files.len(), extract_path);
     Ok(())
 }
 
@@ -475,28 +617,77 @@ async fn serve_static_file(base_path: &PathBuf, requested_path: &str) -> Respons
     }
 }
 
+/// Generate a temporary rpxy configuration and spawn the proxy process in the background.
+/// Returns the child process handle (but the caller may choose to detach).
+fn start_rpxy(args: &Args) -> Result<()> {
+    // Build minimal TOML configuration for rpxy
+    let config_toml = format!(
+        r#"listen_port = 80
+listen_port_tls = 443
+
+[apps."gateway"]
+server_name = "{domain}"
+reverse_proxy = [{{ upstream = [{{ location = "127.0.0.1:{backend_port}", tls = false }}] }}]
+tls = {{ https_redirection = true, acme = true }}
+
+[experimental.acme]
+email = "{email}"
++"#,
+        domain = args.domain,
+        backend_port = args.port,
+        email = args.acme_email,
+    );
+
+    // Persist config to disk next to the running process (or in cache dir).
+    let config_path = std::env::current_dir()?.join("rpxy-gateway-config.toml");
+    std::fs::write(&config_path, config_toml.as_bytes())?;
+
+    // Spawn the rpxy process; inherit stdout/stderr for visibility.
+    let mut child = Command::new(&args.proxy_bin)
+        .arg("--config")
+        .arg(config_path.to_str().expect("valid temp path"))
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to launch rpxy: {}", e))?;
+
+    // Detach: we don't await, but we also don't want child to be dropped immediately.
+    // Spawn a background task that simply waits and logs on exit.
+    std::thread::spawn(move || {
+        if let Ok(status) = child.wait() {
+            if status.success() {
+                info!("rust-rpxy exited cleanly");
+            } else {
+                error!("rust-rpxy process exited with status {:?}", status);
+            }
+        }
+    });
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_slug_from_hostname() {
-        // Test with localhost development setup
+    fn test_extract_domain_from_hostname() {
         let domain = "localhost:8080";
         
-        assert_eq!(extract_slug_from_hostname("my-app.localhost:8080", domain), Some("my-app".to_string()));
-        assert_eq!(extract_slug_from_hostname("test-site.localhost:8080", domain), Some("test-site".to_string()));
-        assert_eq!(extract_slug_from_hostname("localhost:8080", domain), None);
-        assert_eq!(extract_slug_from_hostname("invalid.com", domain), None);
-        assert_eq!(extract_slug_from_hostname("sub.my-app.localhost:8080", domain), Some("sub.my-app".to_string()));
+        // Test valid subdomains
+        assert_eq!(extract_domain_from_hostname("my-app.localhost:8080", domain), Some("my-app".to_string()));
+        assert_eq!(extract_domain_from_hostname("test-site.localhost:8080", domain), Some("test-site".to_string()));
+        assert_eq!(extract_domain_from_hostname("localhost:8080", domain), None);
+        assert_eq!(extract_domain_from_hostname("invalid.com", domain), None);
+        assert_eq!(extract_domain_from_hostname("sub.my-app.localhost:8080", domain), Some("sub.my-app".to_string()));
         
-        // Test without port for browser compatibility
-        assert_eq!(extract_slug_from_hostname("my-app.localhost", "localhost"), Some("my-app".to_string()));
-        assert_eq!(extract_slug_from_hostname("localhost", "localhost"), None);
+        // Test without port
+        assert_eq!(extract_domain_from_hostname("my-app.localhost", "localhost"), Some("my-app".to_string()));
+        assert_eq!(extract_domain_from_hostname("localhost", "localhost"), None);
         
-        // Test production domain for reference
-        let prod_domain = "localhost:8080";
-        assert_eq!(extract_slug_from_hostname("my-app.localhost:8080", prod_domain), Some("my-app".to_string()));
-        assert_eq!(extract_slug_from_hostname("localhost:8080", prod_domain), None);
+        // Test with production domain
+        let prod_domain = "roselite.app";
+        assert_eq!(extract_domain_from_hostname("my-app.roselite.app", prod_domain), Some("my-app".to_string()));
+        assert_eq!(extract_domain_from_hostname("roselite.app", prod_domain), None);
     }
 } 

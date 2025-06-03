@@ -27,7 +27,10 @@ indicatif = "0.17"
 console = "0.15"
 dialoguer = "0.11"
 url = "2.5"
-dirs = "5.0"
+dirs = "5"
 tar = "0.4"
 flate2 = "1.0"
-chrono = { version = "0.4", features = ["serde"] } 
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP client for gateway registration
+reqwest = { version = "0.11", features = ["json"] } 

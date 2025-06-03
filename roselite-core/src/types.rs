@@ -50,21 +50,19 @@ impl fmt::Display for VeilUri {
 pub struct AppInfo {
     pub id: AppId,
     pub name: String,
-    #[serde(default)]
-    pub slug: String,
     pub version: String,
     pub description: String,
     pub developer: String,
     pub category: String,
     pub size_bytes: u64,
-    pub download_count: u64,
-    pub rating: f32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub tags: Vec<String>,
     pub entry_point: String,
     pub veilid_identity: Option<String>,
     pub signature: Option<String>,
+    #[serde(default)]
+    pub chunk_count: usize,
 }
 
 impl AppInfo {
@@ -86,34 +84,3 @@ impl AppInfo {
         format!("https://www.roselite.app/access/{}", self.id.0)
     }
 }
-
-/// Search filters for app discovery
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SearchFilter {
-    pub query: Option<String>,
-    pub category: Option<String>,
-    pub tags: Vec<String>,
-    pub developer: Option<String>,
-    pub min_rating: Option<f32>,
-    pub max_size_bytes: Option<u64>,
-    pub sort_by: Option<SortBy>,
-    pub limit: Option<usize>,
-}
-
-/// Sort options for app listings
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SortBy {
-    Name,
-    Date,
-    Rating,
-    Downloads,
-    Developer,
-}
-
-/// Installation status for local apps
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum InstallStatus {
-    NotInstalled,
-    Installed { version: String },
-    UpdateAvailable { current: String, latest: String },
-} 

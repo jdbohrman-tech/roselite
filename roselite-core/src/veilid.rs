@@ -4,8 +4,13 @@ use std::collections::HashMap;
 use tracing;
 use serde::{Serialize, Deserialize};
 use tokio::sync::RwLock;
-use base64::{Engine as _, engine::general_purpose};
+// Base64 may be used elsewhere; import if necessary (currently unused)
 use crate::crypto::CryptoManager;
+use veilid_core::{TypedKey};
+use std::str::FromStr;
+// DHT types
+use veilid_core::{DHTSchema, DHTReportScope, ValueSubkey};
+use serde_json::{self, Value as JsonValue};
 
 // Full Veilid integration with proper VeilidAPI setup
 // This implementation provides complete Veilid network functionality
@@ -59,7 +64,6 @@ pub struct VeilidConfig {
     /// Storage configuration
     pub storage: StorageConfig,
     /// Bootstrap nodes for initial connection
-    pub bootstrap_nodes: Vec<String>,
     /// Enable development mode (more permissive settings)
     pub development_mode: bool,
 }
@@ -93,16 +97,6 @@ impl Default for VeilidConfig {
             use_fallback_storage: false,
             network: NetworkConfig::default(),
             storage: StorageConfig::default(),
-            bootstrap_nodes: vec![
-                // Use DNS-based bootstrap nodes from Veilid documentation
-                "bootstrap.veilid.net:5150".to_string(),
-                "bootstrap.dev.veilid.net:5150".to_string(),
-                // Additional public nodes from the slides/documentation
-                "178.68.166.46:5158".to_string(),
-                "161.35.164.16:5158".to_string(),
-                "159.89.163.27:5158".to_string(),
-                "159.223.237.84:5158".to_string(),
-            ],
             development_mode: true, // Default to dev mode for easier setup
         }
     }
@@ -173,50 +167,40 @@ impl VeilidConnection {
         }
         
         // Try to initialize Veilid API
-        match self.init_veilid_api().await {
-            Ok(api) => {
-                tracing::info!("Successfully initialized Veilid API");
-                
-                // Store the API
-                self.api = Some(api.clone());
-                
-                // Create routing context with default safety settings
-                match api.routing_context() {
-                    Ok(routing_ctx) => {
-                        self.routing_context = Some(routing_ctx);
-                        tracing::info!("Created Veilid routing context");
-                    },
-                    Err(e) => {
-                        tracing::warn!("Failed to create routing context: {:?}", e);
-                    }
-                }
-                
-                // Get node ID
-                let node_id = self.get_node_id().await?;
-                
-                // Update connection state
-                {
-                    let mut state = self.state.write().await;
-                    state.is_connected = true;
-                    state.network_started = true;
-                    state.node_id = Some(node_id);
-                }
-                
-                tracing::info!("Successfully connected to Veilid network");
+        let api = self.init_veilid_api().await?;
+        tracing::info!("Successfully initialized Veilid API");
+        
+        // Store the API
+        self.api = Some(api.clone());
+        
+        // Create routing context with default safety settings
+        match api.routing_context() {
+            Ok(routing_ctx) => {
+                self.routing_context = Some(routing_ctx);
+                tracing::info!("Created Veilid routing context");
             },
             Err(e) => {
-                tracing::warn!("Failed to connect to Veilid network: {}. Using fallback storage.", e);
-                
-                // Update state to use fallback
-                {
-                    let mut state = self.state.write().await;
-                    state.use_fallback_storage = true;
-                    state.is_connected = true;
-                    state.attachment_state = AttachmentState::Detached;
-                }
+                tracing::warn!("Failed to create routing context: {:?}", e);
             }
         }
         
+        // Wait until we are at least weakly attached before proceeding. This
+        // is critical because DHT operations will fail if we are still in the
+        // Attaching state.
+        self.wait_until_attached().await?;
+        
+        // Get node ID
+        let node_id = self.get_node_id().await?;
+        
+        // Update connection state
+        {
+            let mut state = self.state.write().await;
+            state.is_connected = true;
+            state.network_started = true;
+            state.node_id = Some(node_id);
+        }
+        
+        tracing::info!("Successfully connected to Veilid network");
         Ok(())
     }
 
@@ -259,247 +243,166 @@ impl VeilidConnection {
         Ok(())
     }
 
-    /// Store data in the DHT using Veilid's TableStore or fallback storage
-    pub async fn dht_set(&mut self, key: &str, value: &[u8]) -> Result<()> {
-        tracing::debug!("Storing DHT value for key: {}", key);
-        
-        let use_fallback = {
-            let state = self.state.read().await;
-            state.use_fallback_storage || self.api.is_none()
-        };
-        
-        if use_fallback {
-            // Use fallback in-memory storage
-            self.storage.write().await.insert(key.to_string(), value.to_vec());
-            tracing::debug!("Stored value in fallback storage for key: {}", key);
-            return Ok(());
-        }
-
-        let api = self.get_api()?;
-        
-        // Use Veilid TableStore with proper error handling
-        let table_store = api.table_store()
-            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to get table store: {:?}", e)
-            }))?;
-            
-        // Open or create table with column count of 1
-        let table_db = table_store.open(&self.config.table_name, 1)
+    /// Store raw bytes in a DHT record subkey
+    pub async fn dht_set_subkey(&self, key_str: &str, subkey: ValueSubkey, value: &[u8]) -> Result<()> {
+        self.wait_until_attached().await?;
+        let routing_ctx = self.routing_context.as_ref()
+            .ok_or_else(|| RoseliteError::Veilid(VeilidError::ConnectionFailed))?;
+        let typed_key = TypedKey::from_str(key_str)
+            .map_err(|_| RoseliteError::InvalidUri(format!("Invalid DHT key: {}", key_str)))?;
+        routing_ctx.set_dht_value(typed_key, subkey, value.to_vec(), None)
             .await
-            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to open table: {:?}", e)
-            }))?;
-            
-        // Store the value in column 0 - note: the store method takes &[u8] directly, not Option<&[u8]>
-        table_db.store(0, key.as_bytes(), value)
-            .await
-            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to store value: {:?}", e)
-            }))?;
-            
-        tracing::debug!("Successfully stored DHT value for key: {}", key);
+            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { operation: format!("set_dht_value failed: {:?}", e) }))?;
         Ok(())
     }
 
-    /// Retrieve data from the DHT using Veilid's TableStore or fallback storage
-    pub async fn dht_get(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        tracing::debug!("Retrieving DHT value for key: {}", key);
+    /// Retrieve bytes from a DHT record subkey
+    pub async fn dht_get_subkey(&self, key_str: &str, subkey: ValueSubkey) -> Result<Option<Vec<u8>>> {
+        self.wait_until_attached().await?;
+        let routing_ctx = self.routing_context.as_ref()
+            .ok_or_else(|| RoseliteError::Veilid(VeilidError::ConnectionFailed))?;
+        let typed_key = TypedKey::from_str(key_str)
+            .map_err(|_| RoseliteError::InvalidUri(format!("Invalid DHT key: {}", key_str)))?;
         
-        let use_fallback = {
-            let state = self.state.read().await;
-            state.use_fallback_storage || self.api.is_none()
-        };
-        
-        if use_fallback {
-            // Use fallback in-memory storage
-            let result = self.storage.read().await.get(key).cloned();
-            tracing::debug!("Retrieved value from fallback storage for key: {}", key);
-            return Ok(result);
-        }
-
-        let api = self.get_api()?;
-        
-        let table_store = api.table_store()
-            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to get table store: {:?}", e)
-            }))?;
-            
-        // Open table
-        let table_db = match table_store.open(&self.config.table_name, 1).await {
-            Ok(db) => db,
-            Err(_) => {
-                // Table doesn't exist yet
-                tracing::debug!("Table doesn't exist for key: {}", key);
-                return Ok(None);
-            }
-        };
-            
-        // Load the value from column 0
-        match table_db.load(0, key.as_bytes()).await {
-            Ok(Some(value)) => {
-                tracing::debug!("Successfully retrieved DHT value for key: {}", key);
-                Ok(Some(value))
-            },
-            Ok(None) => {
-                tracing::debug!("No value found for key: {}", key);
-                Ok(None)
-            },
+        // Try to get the value first, if it fails with "record not open", try opening it
+        match routing_ctx.get_dht_value(typed_key, subkey, false).await {
+            Ok(resp) => Ok(resp.map(|v| v.data().to_vec())),
             Err(e) => {
-                Err(RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                    operation: format!("Failed to load value: {:?}", e)
-                }))
+                // Check if the error is due to record not being open
+                if e.to_string().contains("record not open") {
+                    tracing::debug!("Record not open, attempting to open: {}", key_str);
+                    // Try to open the record and then get the value
+                    self.open_dht_record(key_str).await?;
+                    let resp = routing_ctx.get_dht_value(typed_key, subkey, false)
+                        .await
+                        .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
+                            operation: format!("get_dht_value failed after opening: {:?}", e) 
+                        }))?;
+                    Ok(resp.map(|v| v.data().to_vec()))
+                } else {
+                    Err(RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
+                        operation: format!("get_dht_value failed: {:?}", e) 
+                    }))
+                }
             }
         }
     }
 
-    /// Delete data from the DHT using Veilid's TableStore or fallback storage
-    pub async fn dht_delete(&mut self, key: &str) -> Result<()> {
-        tracing::debug!("Deleting DHT value for key: {}", key);
+    /// Open a DHT record for reading
+    pub async fn open_dht_record(&self, key_str: &str) -> Result<()> {
+        self.wait_until_attached().await?;
+        let routing_ctx = self.routing_context.as_ref()
+            .ok_or_else(|| RoseliteError::Veilid(VeilidError::ConnectionFailed))?;
+        let typed_key = TypedKey::from_str(key_str)
+            .map_err(|_| RoseliteError::InvalidUri(format!("Invalid DHT key: {}", key_str)))?;
         
-        let use_fallback = {
-            let state = self.state.read().await;
-            state.use_fallback_storage || self.api.is_none()
-        };
-        
-        if use_fallback {
-            // Use fallback in-memory storage
-            self.storage.write().await.remove(key);
-            tracing::debug!("Deleted value from fallback storage for key: {}", key);
-            return Ok(());
-        }
-
-        let api = self.get_api()?;
-        
-        let table_store = api.table_store()
-            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to get table store: {:?}", e)
-            }))?;
-            
-        // Open table
-        let table_db = table_store.open(&self.config.table_name, 1)
+        routing_ctx.open_dht_record(typed_key, None)
             .await
             .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to open table: {:?}", e)
+                operation: format!("open_dht_record failed: {:?}", e) 
             }))?;
-            
-        // Delete the value using the delete method, not store with None
-        table_db.delete(0, key.as_bytes())
-            .await
-            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to delete value: {:?}", e)
-            }))?;
-            
-        tracing::debug!("Successfully deleted DHT value for key: {}", key);
+        
+        tracing::debug!("Successfully opened DHT record: {}", key_str);
         Ok(())
     }
 
-    /// List keys matching a pattern (enhanced for future implementation)
-    pub async fn dht_list_keys(&self, pattern: &str) -> Result<Vec<String>> {
-        tracing::debug!("Listing DHT keys for pattern: {}", pattern);
-        
-        let use_fallback = {
-            let state = self.state.read().await;
-            state.use_fallback_storage || self.api.is_none()
-        };
-        
-        if use_fallback {
-            // Use fallback in-memory storage
-            let matching_keys: Vec<String> = self.storage.read().await.keys()
-                .filter(|key| key.contains(pattern))
-                .cloned()
-                .collect();
-            tracing::debug!("Found {} matching keys in fallback storage", matching_keys.len());
-            return Ok(matching_keys);
-        }
-
-        // For Veilid TableStore, we would need to iterate through records
-        // This requires a more complex implementation with record inspection
-        tracing::warn!("Pattern-based key listing is not yet implemented for Veilid TableStore");
-        Ok(Vec::new())
-    }
-
-    /// Send a message to another Veilid node
-    pub async fn send_message(&self, target: &str, message: &[u8]) -> Result<()> {
+    /// Delete an entire DHT record
+    pub async fn dht_delete_record(&self, key_str: &str) -> Result<()> {
+        self.wait_until_attached().await?;
         let routing_ctx = self.routing_context.as_ref()
             .ok_or_else(|| RoseliteError::Veilid(VeilidError::ConnectionFailed))?;
-            
-        let api = self.get_api()?;
-        
-        // Parse the target (could be a node ID or route ID)
-        let target_obj = api.parse_as_target(target)
-            .map_err(|e| RoseliteError::Veilid(VeilidError::InvalidUri { 
-                uri: format!("Failed to parse target: {:?}", e)
-            }))?;
-            
-        // Send the message
-        routing_ctx.app_message(target_obj, message.to_vec())
+        let typed_key = TypedKey::from_str(key_str)
+            .map_err(|_| RoseliteError::InvalidUri(format!("Invalid DHT key: {}", key_str)))?;
+        routing_ctx.delete_dht_record(typed_key)
             .await
-            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to send message: {:?}", e)
-            }))?;
-            
-        tracing::debug!("Successfully sent message to target: {}", target);
+            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { operation: format!("delete_dht_record failed: {:?}", e) }))?;
         Ok(())
     }
 
-    /// Make an RPC call to another Veilid node
-    pub async fn rpc_call(&self, target: &str, request: &[u8]) -> Result<Vec<u8>> {
+    /// Convenience wrappers (subkey 0)
+    pub async fn dht_set(&self, key: &str, value: &[u8]) -> Result<()> {
+        self.dht_set_subkey(key, 0, value).await
+    }
+
+    pub async fn dht_get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        self.dht_get_subkey(key, 0).await
+    }
+
+    pub async fn dht_delete(&self, key: &str) -> Result<()> {
+        self.dht_delete_record(key).await
+    }
+
+    /// Create a brand-new DHT record with a simple one-column schema. Returns the record key as string.
+    pub async fn create_dht_record(&self) -> Result<String> {
+        self.create_dht_record_with_cols(2).await
+    }
+
+    /// Create DHT record with custom column count.
+    pub async fn create_dht_record_with_cols(&self, cols: usize) -> Result<String> {
+        self.wait_until_attached().await?;
         let routing_ctx = self.routing_context.as_ref()
             .ok_or_else(|| RoseliteError::Veilid(VeilidError::ConnectionFailed))?;
-            
-        let api = self.get_api()?;
-        
-        // Parse the target
-        let target_obj = api.parse_as_target(target)
-            .map_err(|e| RoseliteError::Veilid(VeilidError::InvalidUri { 
-                uri: format!("Failed to parse target: {:?}", e)
-            }))?;
-            
-        // Make the RPC call
-        let response = routing_ctx.app_call(target_obj, request.to_vec())
+        let cols_u16: u16 = cols.try_into().map_err(|_| RoseliteError::InvalidUri(format!("Too many columns: {}", cols)))?;
+        let schema = DHTSchema::dflt(cols_u16)
+            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { operation: format!("schema build failed: {:?}", e) }))?;
+        let desc = routing_ctx.create_dht_record(schema, None, None)
             .await
-            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to make RPC call: {:?}", e)
-            }))?;
-            
-        tracing::debug!("Successfully made RPC call to target: {}", target);
-        Ok(response)
+            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { operation: format!("create_dht_record failed: {:?}", e) }))?;
+        Ok(desc.key().to_string())
     }
 
-    /// Create a new private route for enhanced privacy
-    pub async fn create_private_route(&self) -> Result<String> {
-        let api = self.get_api()?;
-        
-        let (route_id, route_blob) = api.new_private_route()
+    /// Inspect a record to gauge replication consensus.
+    pub async fn inspect_record(&self, key_str: &str) -> Result<()> {
+        self.wait_until_attached().await?;
+        let routing_ctx = self.routing_context.as_ref()
+            .ok_or_else(|| RoseliteError::Veilid(VeilidError::ConnectionFailed))?;
+        let typed_key = TypedKey::from_str(key_str)
+            .map_err(|_| RoseliteError::InvalidUri(format!("Invalid DHT key: {}", key_str)))?;
+        let report = routing_ctx.inspect_dht_record(typed_key, None, DHTReportScope::SyncSet)
             .await
-            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to create private route: {:?}", e)
-            }))?;
-            
-        // Convert route blob to base64 for sharing
-        let route_str = general_purpose::STANDARD.encode(&route_blob);
-        
-        tracing::info!("Created private route with ID: {:?}", route_id);
-        Ok(route_str)
+            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { operation: format!("inspect_dht_record failed: {:?}", e) }))?;
+        tracing::info!("DHT record inspection: {:?}", report);
+        Ok(())
     }
 
-    /// Import a private route from another node
-    pub async fn import_private_route(&self, route_blob: &str) -> Result<String> {
-        let api = self.get_api()?;
-        
-        // Decode the route blob from base64
-        let blob_data = general_purpose::STANDARD.decode(route_blob)
-            .map_err(|e| RoseliteError::Veilid(VeilidError::InvalidUri { 
-                uri: format!("Failed to decode route blob: {}", e)
-            }))?;
-            
-        let route_id = api.import_remote_private_route(blob_data)
-            .map_err(|e| RoseliteError::Veilid(VeilidError::DhtOperationFailed { 
-                operation: format!("Failed to import private route: {:?}", e)
-            }))?;
-            
-        tracing::info!("Imported private route with ID: {:?}", route_id);
-        Ok(format!("{:?}", route_id))
+    /// Build Veilid configuration (start from upstream default, tweak to work in dev)
+    fn build_veilid_config(&self) -> Result<String> {
+        // base config from library
+        let mut cfg: JsonValue = serde_json::from_str(&veilid_core::default_veilid_config())?;
+
+        // Ensure directories we can write to under current project
+        let data_dir = ".roselite";
+
+        // program name & namespace for isolated stores
+        cfg["program_name"] = JsonValue::String("roselite".to_string());
+        cfg["namespace"] = JsonValue::String("dev".to_string());
+
+        // protected store tweaks
+        let password = std::env::var("ROSELITE_PASSWORD").unwrap_or_default();
+        let insecure = password.is_empty();
+        if let Some(ps) = cfg.get_mut("protected_store") {
+            ps["allow_insecure_fallback"] = JsonValue::Bool(insecure);
+            ps["always_use_insecure_storage"] = JsonValue::Bool(insecure);
+            ps["directory"] = JsonValue::String(data_dir.into());
+
+            if insecure {
+                // Use a dummy password to avoid OS keyring errors while still storing unencrypted.
+                ps["device_encryption_key_password"] = JsonValue::String("roselite-dev".into());
+            } else {
+                ps["device_encryption_key_password"] = JsonValue::String(password.clone());
+            }
+
+            // Only include new password field when changing passwords in secure mode
+            ps["new_device_encryption_key_password"] = JsonValue::Null;
+        }
+        if let Some(ts) = cfg.get_mut("table_store") {
+            ts["directory"] = JsonValue::String(data_dir.into());
+        }
+        if let Some(bs) = cfg.get_mut("block_store") {
+            bs["directory"] = JsonValue::String(data_dir.into());
+        }
+
+        Ok(cfg.to_string())
     }
 
     /// Generate a new cryptographic key pair using our crypto manager
@@ -657,225 +560,6 @@ impl VeilidConnection {
         Ok(Arc::new(api))
     }
 
-    /// Build comprehensive Veilid configuration
-    fn build_veilid_config(&self) -> Result<String> {
-        // Ensure we have a data directory set
-        let data_dir = self.config.storage.data_directory.as_deref().unwrap_or(".roselite");
-        
-        // Build configuration in smaller pieces to avoid recursion limit
-        let protected_store = serde_json::json!({
-            "allow_insecure_fallback": self.config.development_mode,
-            "always_use_insecure_storage": self.config.development_mode,
-            "directory": data_dir,
-            "delete": false,
-            "device_encryption_key_password": "",
-            "new_device_encryption_key_password": null
-        });
-
-        let table_store = serde_json::json!({
-            "directory": data_dir,
-            "delete": false
-        });
-
-        let block_store = serde_json::json!({
-            "directory": data_dir,
-            "delete": false
-        });
-
-        let routing_table = serde_json::json!({
-            "node_id": [],
-            "node_id_secret": [],
-            "bootstrap": self.config.bootstrap_nodes,
-            "bootstrap_keys": [],
-            "limit_over_attached": 64,
-            "limit_fully_attached": 32,
-            "limit_attached_strong": 16,
-            "limit_attached_good": 8,
-            "limit_attached_weak": 5
-        });
-
-        let rpc = serde_json::json!({
-            "concurrency": 0,
-            "queue_size": 1024,
-            "max_timestamp_behind_ms": 10000,
-            "max_timestamp_ahead_ms": 10000,
-            "timeout_ms": 10000,
-            "max_route_hop_count": 4,
-            "default_route_hop_count": 1
-        });
-
-        let dht = serde_json::json!({
-            "max_find_node_count": 20,
-            "resolve_node_timeout_ms": 10000,
-            "resolve_node_count": 1,
-            "resolve_node_fanout": 4,
-            "get_value_timeout_ms": 10000,
-            "get_value_count": 3,
-            "get_value_fanout": 4,
-            "set_value_timeout_ms": 10000,
-            "set_value_count": 5,
-            "set_value_fanout": 4,
-            "min_peer_count": 20,
-            "min_peer_refresh_time_ms": 60000,
-            "validate_dial_info_receipt_time_ms": 2000,
-            "local_subkey_cache_size": 128,
-            "local_max_subkey_cache_memory_mb": 256,
-            "remote_subkey_cache_size": 1024,
-            "remote_max_records": 65536,
-            "remote_max_subkey_cache_memory_mb": 256,
-            "remote_max_storage_space_mb": self.config.storage.max_storage_mb,
-            "public_watch_limit": 32,
-            "member_watch_limit": 8,
-            "max_watch_expiration_ms": 86400000
-        });
-
-        let tls = serde_json::json!({
-            "certificate_path": "",
-            "private_key_path": "",
-            "connection_initial_timeout_ms": self.config.network.connection_timeout_ms
-        });
-
-        let application = serde_json::json!({
-            "https": {
-                "enabled": false,
-                "listen_address": "",
-                "path": "",
-                "url": null
-            },
-            "http": {
-                "enabled": false,
-                "listen_address": "",
-                "path": "",
-                "url": null
-            }
-        });
-
-        let protocol = serde_json::json!({
-            "udp": {
-                "enabled": true,
-                "socket_pool_size": 0,
-                "listen_address": self.config.network.udp_listen_address.as_deref().unwrap_or(""),
-                "public_address": null
-            },
-            "tcp": {
-                "connect": true,
-                "listen": true,
-                "max_connections": self.config.network.max_connections,
-                "listen_address": self.config.network.tcp_listen_address.as_deref().unwrap_or(""),
-                "public_address": null
-            },
-            "ws": {
-                "connect": true,
-                "listen": true,
-                "max_connections": self.config.network.max_connections / 2,
-                "listen_address": self.config.network.ws_listen_address.as_deref().unwrap_or(""),
-                "path": "ws",
-                "url": null
-            },
-            "wss": {
-                "connect": true,
-                "listen": false,
-                "max_connections": self.config.network.max_connections / 4,
-                "listen_address": "",
-                "path": "wss",
-                "url": null
-            }
-        });
-
-        let leases = serde_json::json!({
-            "max_server_signal_leases": 16,
-            "max_server_relay_leases": 16,
-            "max_client_signal_leases": 4,
-            "max_client_relay_leases": 4
-        });
-
-        let relay = serde_json::json!({
-            "client": {
-                "enabled": true
-            },
-            "server": {
-                "enabled": true
-            }
-        });
-
-        let network = serde_json::json!({
-            "connection_initial_timeout_ms": self.config.network.connection_timeout_ms,
-            "connection_inactivity_timeout_ms": 60000,
-            "max_connections_per_ip4": self.config.network.max_connections,
-            "max_connections_per_ip6_prefix": self.config.network.max_connections,
-            "max_connections_per_ip6_prefix_size": 56,
-            "max_connection_frequency_per_min": 128,
-            "client_allowlist_timeout_ms": 300000,
-            "reverse_connection_receipt_time_ms": 5000,
-            "hole_punch_receipt_time_ms": 5000,
-            "network_key_password": null,
-            "routing_table": routing_table,
-            "rpc": rpc,
-            "dht": dht,
-            "upnp": self.config.network.enable_upnp,
-            "detect_address_changes": self.config.network.enable_nat_detection,
-            "restricted_nat_retries": 3,
-            "tls": tls,
-            "application": application,
-            "protocol": protocol,
-            "leases": leases,
-            "relay": relay
-        });
-
-        let logging = serde_json::json!({
-            "system": {
-                "enabled": true,
-                "level": "info",
-                "ignore_log_targets": []
-            },
-            "terminal": {
-                "enabled": false,
-                "level": "info",
-                "ignore_log_targets": []
-            },
-            "file": {
-                "enabled": false,
-                "path": "",
-                "append": true,
-                "level": "info",
-                "ignore_log_targets": []
-            },
-            "client_api": {
-                "enabled": true,
-                "level": "info",
-                "ignore_log_targets": []
-            },
-            "otlp": {
-                "enabled": false,
-                "level": "trace",
-                "grpc_endpoint": "",
-                "service_name": "",
-                "ignore_log_targets": []
-            },
-            "console": {
-                "enabled": false
-            }
-        });
-
-        let config_json = serde_json::json!({
-            "program_name": self.config.program_name,
-            "namespace": self.config.namespace,
-            "capabilities": {
-                "disable": []
-            },
-            "protected_store": protected_store,
-            "table_store": table_store,
-            "block_store": block_store,
-            "network": network,
-            "testing": {
-                "subnode_index": 0
-            },
-            "logging": logging
-        });
-
-        Ok(config_json.to_string())
-    }
-
     /// Enhanced Veilid update callback handler with state management
     async fn update_callback(update: veilid_core::VeilidUpdate, state: Arc<RwLock<ConnectionState>>) {
         match update {
@@ -928,6 +612,41 @@ impl VeilidConnection {
             },
         }
     }
+
+    /// Block until the attachment state reaches at least `AttachedWeak` or the timeout elapses.
+    async fn wait_until_attached(&self) -> Result<()> {
+        use tokio::time::{sleep, Duration, Instant};
+
+        const TIMEOUT: Duration = Duration::from_secs(30);
+        const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+        let start = Instant::now();
+        loop {
+            {
+                let state = self.state.read().await;
+                match state.attachment_state {
+                    AttachmentState::AttachedWeak | AttachmentState::AttachedGood | AttachmentState::AttachedStrong | AttachmentState::FullyAttached | AttachmentState::OverAttached => {
+                        tracing::info!(
+                            "Veilid node attached (state = {:?}) after {:?}",
+                            state.attachment_state,
+                            start.elapsed()
+                        );
+                        return Ok(());
+                    }
+                    AttachmentState::Detached | AttachmentState::Detaching => {
+                        return Err(RoseliteError::Veilid(VeilidError::ConnectionFailed));
+                    }
+                    AttachmentState::Attaching => {}
+                }
+            }
+
+            if start.elapsed() > TIMEOUT {
+                tracing::error!("Timed out waiting for Veilid node to attach ({:?})", TIMEOUT);
+                return Err(RoseliteError::Veilid(VeilidError::ConnectionFailed));
+            }
+            sleep(POLL_INTERVAL).await;
+        }
+    }
 }
 
 /// Detailed network state information
@@ -974,10 +693,10 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_veilid_connection_fallback() {
+    async fn test_veilid_connection_basic_ops() {
         let mut conn = VeilidConnection::new().await.unwrap();
         
-        // Should connect (possibly with fallback)
+        // Connect should succeed (or return an explicit error)
         conn.connect().await.unwrap();
         assert!(conn.is_connected().await);
         
@@ -998,6 +717,7 @@ mod tests {
     async fn test_network_state() {
         let conn = VeilidConnection::new().await.unwrap();
         let state = conn.get_network_state().await.unwrap();
-        assert!(state.mode.contains("Fallback") || state.mode.contains("Veilid"));
+        // Depending on environment, we may or may not be connected yet, but the call should succeed.
+        assert!(state.mode.contains("Veilid") || state.mode.contains("Fallback"));
     }
 } 

@@ -6,8 +6,14 @@ use roselite_core::{
     types::{VeilUri, AppId},
 };
 use std::path::PathBuf;
-use tracing;
 use url;
+use std::fs;
+use dirs;
+use dialoguer::Password;
+use std::env;
+use std::io::{self, BufRead, Write};
+use std::time::Duration;
+use std::collections::HashMap;
 
 mod gateway;
 
@@ -21,6 +27,12 @@ use gateway::UniversalGateway;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Base domain (host[:port]) of the universal gateway used to build shareable URLs
+    /// (e.g. "example.com" or "localhost:8080"). Required for publish and access commands,
+    /// but optional for bundle.
+    #[arg(long = "gateway-url", global = true)]
+    gateway_url: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -66,11 +78,11 @@ enum Commands {
         #[arg(value_name = "PACKAGE")]
         package: PathBuf,
         
-        /// Show all available gateways
+        /// Show all available gateways in output
         #[arg(short, long)]
         gateways: bool,
         
-        /// Open the site in browser after publishing
+        /// Open the primary URL in browser after publishing
         #[arg(long)]
         open: bool,
     },
@@ -117,10 +129,18 @@ async fn main() -> Result<()> {
             ).await?;
         }
         Commands::Publish { package, gateways, open } => {
-            cmd_publish(package, gateways, open).await?;
+            ensure_password()?;
+            let gw = cli.gateway_url.clone().ok_or_else(|| {
+                color_eyre::eyre::eyre!("--gateway-url must be provided for publish")
+            })?;
+            cmd_publish(package, gateways, open, gw).await?;
         }
         Commands::Access { key_or_url } => {
-            cmd_access(key_or_url).await?;
+            ensure_password()?;
+            let gw = cli.gateway_url.clone().ok_or_else(|| {
+                color_eyre::eyre::eyre!("--gateway-url must be provided for access")
+            })?;
+            cmd_access(key_or_url, gw).await?;
         }
     }
 
@@ -190,7 +210,7 @@ async fn cmd_bundle(
     Ok(())
 }
 
-async fn cmd_publish(package_path: PathBuf, gateways: bool, open: bool) -> Result<()> {
+async fn cmd_publish(package_path: PathBuf, gateways: bool, open: bool, gateway_domain: String) -> Result<()> {
     println!("📤 Publishing package: {}", package_path.display());
     
     // Load package
@@ -202,35 +222,26 @@ async fn cmd_publish(package_path: PathBuf, gateways: bool, open: bool) -> Resul
         package.manifest.developer
     );
     
-    // Initialize Universal Gateway
-    let gateway = UniversalGateway::new();
-    
     // Initialize Veilid connection and store
     println!("🌐 Connecting to Veilid DHT...");
-    let mut store = match VeilidStore::new().await {
-        Ok(store) => {
-            println!("✅ Successfully connected to Veilid network!");
-            store
-        },
-        Err(e) => {
-            println!("⚠️  Failed to connect to Veilid network: {}", e);
-            println!("📝 This could be due to:");
-            println!("   • No Veilid bootstrap nodes available");
-            println!("   • Network connectivity issues");
-            println!("   • Veilid node not properly configured");
-            println!("   • Running in fallback mode");
-            
-            // Still try to proceed with fallback mode
-            VeilidStore::new().await?
-        }
-    };
+    let mut store = VeilidStore::new().await.map_err(|e| {
+        println!("❌ Failed to connect to Veilid network: {}", e);
+        color_eyre::eyre::eyre!("Unable to establish Veilid connection")
+    })?;
+    println!("✅ Successfully connected to Veilid network!");
     
     // Publish to Veilid DHT
     println!("📡 Publishing to Veilid DHT...");
     
     let result = match store.publish(package).await {
-        Ok(veil_uri) => {
+        Ok((veil_uri, updated_package)) => {
             println!("✅ Package published successfully!");
+            
+            // Get DHT key
+            let dht_key = veil_uri.app_id.0.clone();
+            println!("🔗 DHT key: {}", dht_key);
+            println!("💡 Configure your domain with a DNS TXT record:\n    example.com. IN TXT \"veilid-app={}\"", dht_key);
+            println!("👉 Then point a CNAME to your gateway ({}).", gateway_domain);
             
             // Show DHT record information
             println!("\n📊 DHT Record Details:");
@@ -241,61 +252,46 @@ async fn cmd_publish(package_path: PathBuf, gateways: bool, open: bool) -> Resul
             println!("   🔗 DHT Record Key: {}", veil_uri.app_id.0);
             println!("   📡 Storage: Veilid distributed hash table");
             
-            // Generate gateway URLs and instructions
-            let app_name = Some(store.get_app(&veil_uri.app_id).await?.map(|app| app.name).unwrap_or_else(|| veil_uri.app_id.0.clone()));
-            let primary_url = gateway.generate_url(&veil_uri.app_id, app_name.as_deref())?;
-            
             // Show instant web access
             println!("\n🚀 INSTANT WEB ACCESS:");
-            println!("   🌐 Primary URL: {}", primary_url);
-            println!("   📱 Mobile-friendly HTTPS");
+            println!("   🌐 Primary URL: {}", veil_uri.to_string());
+            println!("   📱 Mobile-friendly access");
             println!("   🔄 Real-time DHT resolution");
             println!("   ✅ No setup required!");
             
             if gateways {
                 // Show all available gateways
                 println!("\n🌍 ALL AVAILABLE GATEWAYS:");
-                let all_urls = gateway.generate_all_urls(&veil_uri.app_id, app_name.as_deref());
-                for (name, url) in all_urls {
-                    println!("   🔗 {}: {}", name, url);
-                }
+                println!("   🔗 Subdomain: {}", veil_uri.to_string());
+                println!("   🔗 Direct DHT: http://{}/VLD0:{}", gateway_domain, veil_uri.app_id.0);
             }
-            
-            // Show comprehensive gateway instructions
-            println!("\n{}", gateway.generate_setup_instructions(&veil_uri.app_id, app_name.as_deref()));
-            
-            // Show sharing information
-            println!("\n{}", gateway.generate_sharing_text(&veil_uri.app_id, app_name.as_deref()));
             
             // Open in browser if requested
             if open {
                 println!("\n🌐 Opening site in browser...");
-                match open_url(&primary_url) {
-                    Ok(_) => println!("✅ Opened {} in default browser", primary_url),
+                match open_url(&veil_uri.to_string()) {
+                    Ok(_) => println!("✅ Opened {} in default browser", veil_uri.to_string()),
                     Err(e) => {
                         println!("⚠️  Failed to open browser: {}", e);
-                        println!("💡 Manually visit: {}", primary_url);
+                        println!("💡 Manually visit: {}", veil_uri.to_string());
                     }
                 }
             }
             
             // Traditional DNS setup (for advanced users)
             println!("\n🔧 ADVANCED: Custom Domain Setup (Optional)");
-            println!("For your own domain (like jdbohrman.tech):");
+            println!("For your own domain (like {}):", veil_uri.to_string());
             println!("   1. Add DNS TXT record:");
-            println!("      jdbohrman.tech. IN TXT \"veilid-app={}\"", veil_uri.app_id.0);
+            println!("      {}.com. IN TXT \"veilid-app={}\"", veil_uri.to_string(), veil_uri.app_id.0);
             if let Some(version) = &veil_uri.version {
-                println!("      jdbohrman.tech. IN TXT \"veilid-version={}\"", version);
+                println!("      {}.com. IN TXT \"veilid-version={}\"", veil_uri.to_string(), version);
             }
-            println!("   2. Deploy gateway code or use CNAME:");
-            if let Ok(primary_url) = gateway.generate_url(&veil_uri.app_id, app_name.as_deref()) {
-                let gateway_domain = primary_url.split("://").nth(1).unwrap_or("");
-                println!("      jdbohrman.tech. CNAME {}", gateway_domain);
-            }
-            println!("   3. Access via: https://jdbohrman.tech");
+            println!("   2. Point domain to gateway:");
+            println!("      {}.com. CNAME {}", veil_uri.to_string(), gateway_domain);
+            println!("   3. Access via: https://{}.com", veil_uri.to_string());
             
             println!("\n💡 Next Steps:");
-            println!("   ✅ Your site is live at: {}", primary_url);
+            println!("   ✅ Your site is live at: {}", veil_uri.to_string());
             println!("   📤 Share the URL with users");
             if !open {
                 println!("   🌐 Use --open flag to auto-launch browser");
@@ -303,6 +299,7 @@ async fn cmd_publish(package_path: PathBuf, gateways: bool, open: bool) -> Resul
             if !gateways {
                 println!("   🔗 Use --gateways flag to see all access options");
             }
+            println!("   🚧 Note: The URL will resolve when your gateway at {} is accessible", gateway_domain);
             
             Ok(())
         },
@@ -353,7 +350,7 @@ fn open_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_access(key_or_url: String) -> Result<()> {
+async fn cmd_access(key_or_url: String, gateway_domain: String) -> Result<()> {
     println!("🌐 Accessing site: {}", key_or_url);
     
     let app_id = if key_or_url.starts_with("https://") || key_or_url.starts_with("http://") {
@@ -379,20 +376,10 @@ async fn cmd_access(key_or_url: String) -> Result<()> {
     
     // Initialize Veilid store to fetch site data
     println!("📡 Connecting to Veilid DHT...");
-    let mut store = match VeilidStore::new().await {
-        Ok(store) => store,
-        Err(e) => {
-            println!("⚠️  Failed to connect to Veilid network: {}", e);
-            println!("📝 DHT access requires a connected Veilid node");
-            println!("💡 To resolve DHT records, you need:");
-            println!("   • A running Veilid node");
-            println!("   • Network connectivity to DHT bootstrap nodes");
-            println!("   • Proper Veilid configuration");
-            
-            println!("🚀 Would attempt to access site from DHT key: {}", app_id.0);
-            return Ok(());
-        }
-    };
+    let mut store = VeilidStore::new().await.map_err(|e| {
+        println!("❌ Failed to connect to Veilid network: {}", e);
+        color_eyre::eyre::eyre!("Unable to establish Veilid connection")
+    })?;
     
     let result = async {
         // Try to fetch site from Veilid DHT
@@ -411,7 +398,7 @@ async fn cmd_access(key_or_url: String) -> Result<()> {
                 println!("   example.com. IN TXT \"veilid-app={}\"", app_id.0);
                 
                 // Show gateway access information (but don't open browser)
-                let gateway = UniversalGateway::new();
+                let gateway = UniversalGateway::from_domain(&gateway_domain);
                 if let Ok(primary_url) = gateway.generate_url(&app_id, Some(&app_info.name)) {
                     println!("   🌐 Gateway URL: {}", primary_url);
                     
@@ -495,4 +482,31 @@ async fn cmd_access(key_or_url: String) -> Result<()> {
     }
     
     result
+}
+
+fn ensure_password() -> Result<()> {
+    if env::var("ROSELITE_PASSWORD").is_ok() {
+        return Ok(());
+    }
+
+    let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from(".roselite-config"));
+    let file_path = config_dir.join("roselite").join("password.txt");
+    if let Some(parent) = file_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let password = if file_path.exists() {
+        fs::read_to_string(&file_path)?.trim().to_string()
+    } else {
+        let pass = Password::new()
+            .with_prompt("Set a Veilid keystore password (leave blank to store unencrypted)")
+            .with_confirmation("Confirm", "Passwords do not match")
+            .allow_empty_password(true)
+            .interact()?;
+        fs::write(&file_path, &pass)?;
+        pass
+    };
+
+    env::set_var("ROSELITE_PASSWORD", password);
+    Ok(())
 } 

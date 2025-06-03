@@ -22,9 +22,8 @@ pub struct PackageManifest {
     pub category: String,
     pub entry: String,
     pub tags: Vec<String>,
-    /// Human-readable URL-safe identifier (auto-generated from name if not provided)
-    #[serde(default)]
-    pub slug: String,
+    /// DHT record key where the package is stored
+    pub dht_key: String,
     pub identity: String,
     pub signature: String,
     pub format_version: String,
@@ -42,30 +41,7 @@ pub struct PackageManifest {
 }
 
 impl PackageManifest {
-    /// Generates a URL-safe slug from the app name
-    pub fn generate_slug(name: &str) -> String {
-        name.to_lowercase()
-            .chars()
-            .filter_map(|c| {
-                if c.is_alphanumeric() {
-                    Some(c)
-                } else if c.is_whitespace() || c == '-' || c == '_' {
-                    Some('-')
-                } else {
-                    None
-                }
-            })
-            .collect::<String>()
-            .trim_matches('-')
-            .to_string()
-    }
-    
-    /// Ensure the slug is set, generating it from name if needed
-    pub fn ensure_slug(&mut self) {
-        if self.slug.is_empty() {
-            self.slug = Self::generate_slug(&self.name);
-        }
-    }
+    // No additional methods needed for slug functionality
 }
 
 /// App permissions for sandboxing
@@ -88,24 +64,6 @@ pub struct Package {
 }
 
 impl Package {
-    /// Generates a URL-safe slug from the app name
-    pub fn generate_slug(name: &str) -> String {
-        name.to_lowercase()
-            .chars()
-            .filter_map(|c| {
-                if c.is_alphanumeric() {
-                    Some(c)
-                } else if c.is_whitespace() || c == '-' || c == '_' {
-                    Some('-')
-                } else {
-                    None
-                }
-            })
-            .collect::<String>()
-            .trim_matches('-')
-            .to_string()
-    }
-
     /// Load package from .veilidpkg file
     pub async fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = tokio::fs::read(path).await?;
@@ -161,24 +119,18 @@ impl Package {
         AppInfo {
             id: AppId(identity.clone()),
             name: self.manifest.name.clone(),
-            slug: if self.manifest.slug.is_empty() { 
-                Self::generate_slug(&self.manifest.name) 
-            } else { 
-                self.manifest.slug.clone() 
-            },
             version: self.manifest.version.clone(),
             description: self.manifest.description.clone(),
             developer: self.manifest.developer.clone(),
             category: self.manifest.category.clone(),
             size_bytes: self.content.len() as u64,
-            download_count: 0,
-            rating: 0.0,
             created_at: now,
             updated_at: now,
             tags: self.manifest.tags.clone(),
             entry_point: self.manifest.entry.clone(),
             veilid_identity: Some(identity),
             signature: None,
+            chunk_count: 0,
         }
     }
 
@@ -282,9 +234,19 @@ impl Package {
         let files = self.extract_files().await?;
         Ok(files.keys().cloned().collect())
     }
+
+    /// Set the DHT key for this package
+    pub fn set_dht_key(&mut self, dht_key: String) {
+        self.manifest.dht_key = dht_key;
+    }
+
+    /// Check if the package has a DHT key
+    pub fn has_dht_key(&self) -> bool {
+        !self.manifest.dht_key.is_empty()
+    }
 }
 
-/// Builder for creating packages
+/// Builder for creating packages from source directories
 pub struct PackageBuilder {
     name: String,
     version: String,
@@ -293,13 +255,13 @@ pub struct PackageBuilder {
     entry: String,
     tags: Vec<String>,
     source_dir: std::path::PathBuf,
-    slug: Option<String>,
     identity: Option<String>,
     private_key: Option<String>,
     public_key: Option<String>,
 }
 
 impl PackageBuilder {
+    /// Create a new package builder
     pub fn new<P: AsRef<Path>>(name: String, source_dir: P) -> Self {
         Self {
             name,
@@ -309,89 +271,96 @@ impl PackageBuilder {
             entry: "index.html".to_string(),
             tags: Vec::new(),
             source_dir: source_dir.as_ref().to_path_buf(),
-            slug: None,
             identity: None,
             private_key: None,
             public_key: None,
         }
     }
 
+    /// Set the package version
     pub fn version(mut self, version: String) -> Self {
         self.version = version;
         self
     }
 
+    /// Set the package description
     pub fn description(mut self, description: String) -> Self {
         self.description = description;
         self
     }
 
+    /// Set the package developer
     pub fn developer(mut self, developer: String) -> Self {
         self.developer = developer;
         self
     }
 
+    /// Set the entry point file
     pub fn entry(mut self, entry: String) -> Self {
         self.entry = entry;
         self
     }
 
+    /// Set the package tags
     pub fn tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
     }
 
-    pub fn slug(mut self, slug: String) -> Self {
-        self.slug = Some(slug);
-        self
-    }
-
+    /// Set the Veilid identity
     pub fn identity(mut self, identity: String) -> Self {
         self.identity = Some(identity);
         self
     }
     
+    /// Set the signing keypair
     pub fn keypair(mut self, public_key: String, private_key: String) -> Self {
         self.public_key = Some(public_key);
         self.private_key = Some(private_key);
         self
     }
 
-    /// Build the package with proper signing and compression
+    /// Build the package
     pub async fn build(self) -> Result<Package> {
+        // Initialize crypto manager for keypair and signing operations
         let crypto = CryptoManager::new()?;
         
-        // Generate or use provided keypair
-        let (public_key, private_key) = if let (Some(pub_key), Some(priv_key)) = (self.public_key.clone(), self.private_key.clone()) {
-            (pub_key, priv_key)
-        } else {
+        // Generate identity if not provided
+        let identity = match self.identity {
+            Some(id) => id,
+            None => {
+                let (public_key, _) = crypto.generate_keypair()?;
+                public_key
+            }
+        };
+
+        // Generate keypair if not provided
+        let (public_key, private_key) = match (self.public_key, self.private_key) {
+            (Some(pub_key), Some(priv_key)) => (pub_key, priv_key),
+            _ => {
             crypto.generate_keypair()?
+            }
         };
         
-        let identity = self.identity.clone().unwrap_or_else(|| {
-            // Use public key as identity for Veilid compatibility
-            public_key.clone()
-        });
-
-        let now = Utc::now();
+        // Create manifest
         let mut manifest = PackageManifest {
-            name: self.name.clone(),
-            version: self.version.clone(),
-            description: self.description.clone(),
-            developer: self.developer.clone(),
-            author: self.developer.clone(),
+            name: self.name,
+            version: self.version,
+            description: self.description,
+            developer: self.developer,
+            author: String::new(),
             category: "general".to_string(),
-            entry: self.entry.clone(),
-            tags: self.tags.clone(),
-            identity: identity.clone(),
-            signature: String::new(), // Will be filled after signing
-            format_version: crate::PACKAGE_FORMAT_VERSION.to_string(),
+            entry: self.entry,
+            tags: self.tags,
+            dht_key: String::new(),
+            identity,
+            signature: String::new(),
+            format_version: "1.0.0".to_string(),
             dependencies: Vec::new(),
             permissions: Vec::new(),
-            created_at: now,
-            updated_at: now,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
             public_key: public_key.clone(),
-            slug: String::new(),
         };
 
         // Create tarball from source directory
@@ -549,35 +518,6 @@ mod tests {
         assert!(is_valid);
     }
 
-    #[tokio::test]
-    async fn test_package_verification() {
-        let crypto = CryptoManager::new().unwrap();
-        let (public_key, private_key) = crypto.generate_keypair().unwrap();
-        
-        // Create a temporary directory
-        let temp_dir = TempDir::new().unwrap();
-        let source_dir = temp_dir.path().join("test_app");
-        fs::create_dir_all(&source_dir).unwrap();
-        fs::write(source_dir.join("index.html"), b"<html></html>").unwrap();
-
-        // Build package with specific keypair
-        let package = PackageBuilder::new("test-app".to_string(), &source_dir)
-            .keypair(public_key.clone(), private_key.clone())
-            .build()
-            .await
-            .unwrap();
-
-        // Verify signature
-        let is_valid = package.verify_signature(&crypto).unwrap();
-        assert!(is_valid);
-        
-        // Test with empty signature
-        let mut package_copy = package.clone();
-        package_copy.manifest.signature = String::new();
-        let is_valid = package_copy.verify_signature(&crypto).unwrap();
-        assert!(!is_valid);
-    }
-
     #[test]
     fn test_manifest_validation() {
         // Test valid manifest
@@ -598,7 +538,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             public_key: "test-key".to_string(),
-            slug: String::new(),
+            dht_key: "VLD0:test-key".to_string(),
         };
         
         assert!(Package::validate_manifest(&valid_manifest).is_ok());

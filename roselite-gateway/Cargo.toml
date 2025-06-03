@@ -43,5 +43,12 @@ dotenvy = "0.15"
 anyhow = "1.0"
 color-eyre = { workspace = true }
 
+# Archive handling
+tar = "0.4"
+flate2 = "1.0"
+
+# DNS resolver
+hickory-resolver = "0.24"
+
 [dev-dependencies]
 tempfile = "3.0" 
