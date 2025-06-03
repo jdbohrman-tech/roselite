@@ -1,19 +1,20 @@
 [package]
 name = "roselite-gateway"
-version = "0.1.0"
-edition = "2021"
-authors = ["JD Bohrman <jd@jdbohrman.tech>"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Veilid Gateway Server for Roselite Apps"
 
 [dependencies]
 # Core dependencies
 roselite-core = { path = "../roselite-core" }
-tokio = { version = "1.0", features = ["full"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-anyhow = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # HTTP server
 axum = { version = "0.7", features = ["tokio"] }
@@ -33,10 +34,13 @@ mime_guess = "2.0"
 futures = "0.3"
 
 # CLI
-clap = { version = "4.0", features = ["derive"] }
+clap = { workspace = true }
 
 # Environment
 dotenvy = "0.15"
+
+# Error handling
+color-eyre = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.0" 
