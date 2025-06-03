@@ -41,18 +41,14 @@ export default defineConfig({
 					label: 'Architecture',
 					items: [
 						{ label: 'Overview', slug: 'architecture' },
+						{ label: 'DHT Gateway', slug: 'api/gateway-api' },
+						{ label: '.veilidpkg Format', slug: 'reference/veilidpkg-format' },
 					],
 				},
 				{
 					label: 'CLI Reference',
 					items: [
 						{ label: 'Commands', slug: 'cli/commands' },
-					],
-				},
-				{
-					label: 'API Reference',
-					items: [
-						{ label: 'Gateway API', slug: 'api/gateway-api' },
 					],
 				},
 				{

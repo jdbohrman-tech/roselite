@@ -1,11 +1,11 @@
 ---
-title: Gateway API Reference
-description: Gateway API and hosting setup (Coming Soon)
+title: DHT Gateway
+description: Learn how we handle routing via the `roselite-gateway`
 ---
 
-# Gateway API Reference - Coming Soon
+# roselite-gateway
 
-The Roselite gateway infrastructure is currently in development. This page will contain the complete API reference once universal gateways are deployed.
+The Roselite gateway infrastructure is currently in development. This page will contain the reference, but you should expect changes.
 
 ## Current Status
 

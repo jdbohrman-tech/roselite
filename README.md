@@ -141,6 +141,7 @@ Roselite packages (`.veilidpkg`) contain optimized metadata:
 ```json
 {
   "name": "My Website",
+  "slug": "my-website",
   "version": "1.0.0", 
   "description": "My personal portfolio",
   "developer": "Developer Name",
